@@ -1,0 +1,5 @@
+{
+  "name": "LingoPlayer Offline",
+  "description": "A fully offline intelligent video player. Features on-device AI for subtitles (Whisper), local dictionary definitions, and native text-to-speech.",
+  "requestFramePermissions": []
+}

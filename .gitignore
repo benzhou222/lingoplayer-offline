@@ -1,0 +1,27 @@
+# 依赖目录
+node_modules/
+
+# 构建产物
+dist/
+dist-electron/
+
+# 环境配置（通常包含敏感信息）
+.env.local
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 日志文件
+*.log
+
+# 临时文件
+*.tmp
+*.swp
+
+# IDE/编辑器配置
+.vscode/
+.idea/
+
+# 可选：如果你使用 Electron 打包时生成额外缓存
+out/
