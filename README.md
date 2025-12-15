@@ -47,7 +47,7 @@ LingoPlayer AI is a modern, privacy-focused video player designed to supercharge
 1. Clone the repository:
    
    ```bash
-   git clone https://github.com/yourusername/lingoplayer-offline.git
+   git clone https://github.com/benzhou222/lingoplayer-offline.git
    cd lingoplayer-offline
    ```
 
