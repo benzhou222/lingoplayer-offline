@@ -1,21 +1,26 @@
 import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { fetchFile, toBlobURL } from '@ffmpeg/util';
 
-// CACHE: We cache the Blob URLs of the core files so we don't fetch them every time.
+// CACHE
 let cachedCoreURL: string | null = null;
 let cachedWasmURL: string | null = null;
 let cachedWorkerURL: string | null = null;
 
-// Track active jobs for cancellation. Key: jobId, Value: termination function
 const activeJobs = new Map<string, { terminate: () => void }>();
+
+// Helper to check for Electron
+function getElectron() {
+    // @ts-ignore
+    return (typeof window !== 'undefined' && window.electron && window.electron.isElectron) ? window.electron : null;
+}
 
 async function createFreshFFmpeg(onProgress?: (progress: number) => void) {
     const instance = new FFmpeg();
-
     if (onProgress) onProgress(1);
 
-    // Determine thread support
+    // Check Cross-Origin Isolation (Needed for SharedArrayBuffer)
     const isMultiThreaded = window.crossOriginIsolated;
+    console.log(`[FFmpeg WASM] Loading... Multi-threaded: ${isMultiThreaded}`);
 
     const coreBase = isMultiThreaded
         ? 'https://unpkg.com/@ffmpeg/core-mt@0.12.6/dist/esm'
@@ -24,7 +29,6 @@ async function createFreshFFmpeg(onProgress?: (progress: number) => void) {
     if (onProgress) onProgress(5);
 
     try {
-        // Prepare Blob URLs if not cached
         if (!cachedCoreURL || !cachedWasmURL) {
             cachedCoreURL = await toBlobURL(`${coreBase}/ffmpeg-core.js`, 'text/javascript');
             cachedWasmURL = await toBlobURL(`${coreBase}/ffmpeg-core.wasm`, 'application/wasm');
@@ -40,13 +44,11 @@ async function createFreshFFmpeg(onProgress?: (progress: number) => void) {
         });
 
     } catch (e: any) {
-        console.error("FFmpeg load failed:", e);
-        // Fallback logic for single-threaded if multi-threaded fails
+        console.error("FFmpeg WASM load failed:", e);
         if (isMultiThreaded) {
             console.warn("Retrying with single-threaded core...");
             const stBase = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm';
             try {
-                // We don't cache fallback URLs to keep logic simple, just load directly
                 await instance.load({
                     coreURL: await toBlobURL(`${stBase}/ffmpeg-core.js`, 'text/javascript'),
                     wasmURL: await toBlobURL(`${stBase}/ffmpeg-core.wasm`, 'application/wasm'),
@@ -64,72 +66,79 @@ async function createFreshFFmpeg(onProgress?: (progress: number) => void) {
 }
 
 /**
- * Extracts audio from a video file and converts it to a standard 16kHz Mono WAV.
- * Handles large files via WORKERFS mounting to avoid Memory OOM.
+ * Extracts audio from a video file.
  */
 export async function extractAudioAsWav(videoFile: File): Promise<Float32Array> {
-    // ELECTRON NATIVE FALLBACK
-    // @ts-ignore
-    if (window.electron && window.electron.isElectron && (videoFile as any).path) {
-        console.log("[Converter] Using Electron Native FFmpeg for audio extraction");
-        // @ts-ignore
-        return await window.electron.extractAudio((videoFile as any).path);
+    const electron = getElectron();
+    const filePath = (videoFile as any).path;
+
+    // 1. ELECTRON NATIVE PATH
+    if (electron && filePath) {
+        try {
+            console.log("[Converter] ⚡ Using Native Electron FFmpeg for Extraction:", filePath);
+            const buffer = await electron.extractAudio(filePath);
+
+            // Native buffer is F32LE raw
+            const floatArray = new Float32Array(buffer.buffer, buffer.byteOffset, buffer.byteLength / 4);
+            console.log("[Converter] Extraction successful. Samples:", floatArray.length);
+            return floatArray;
+        } catch (e: any) {
+            console.error("Native extraction failed:", e);
+            throw new Error(`Native Audio Extraction Failed: ${e.message}`);
+        }
     }
 
+    // 2. BROWSER WASM PATH
+    console.log("[Converter] 🐢 Using Browser WASM FFmpeg for Extraction (Native not available)");
     let instance: FFmpeg | null = null;
 
     try {
         instance = await createFreshFFmpeg();
-        // Note: extractAudio is treated as a transient internal job, currently not tied to external cancellation 
-        // in the same way video conversion is (which has a dedicated UI button). 
-        // If we needed to cancel this, we'd need to pass a signal or ID.
     } catch (e: any) {
-        throw new Error(`FFmpeg Load Error: ${e.message}`);
+        throw new Error(`[FFmpeg] Engine Load Error: ${e.message}`);
     }
 
-    // Threshold: 256MB. 
-    // Files smaller than this are safer/faster in MEMFS. 
-    // Files larger utilize WORKERFS to avoid crashing the tab.
+    const logBuffer: string[] = [];
+    instance.on('log', ({ message }) => {
+        logBuffer.push(message);
+        if (logBuffer.length > 30) logBuffer.shift();
+    });
+
     const MOUNT_THRESHOLD = 256 * 1024 * 1024;
     const useMount = videoFile.size > MOUNT_THRESHOLD;
 
     const mountDir = '/data';
-    const safeFileName = 'input_video'; // generic name avoids escaping issues
-    const mountedFileName = videoFile.name.replace(/['"\s]/g, '_'); // sanitize slightly
+    const safeFileName = 'input_video';
+    const mountedFileName = videoFile.name.replace(/['"\s]/g, '_');
     const inputPath = useMount ? `${mountDir}/${mountedFileName}` : safeFileName;
     const outputName = 'output.wav';
 
     try {
         if (useMount) {
-            console.log(`[Converter] File size ${(videoFile.size / 1024 / 1024).toFixed(0)}MB > 256MB. Using WORKERFS mount.`);
             try { await instance.createDir(mountDir); } catch (e) { }
-
             // @ts-ignore
             await instance.mount('WORKERFS', {
                 files: [new File([videoFile], mountedFileName, { type: videoFile.type })]
             }, mountDir);
-
         } else {
-            console.log(`[Converter] File size ${(videoFile.size / 1024 / 1024).toFixed(0)}MB. Using in-memory write.`);
             await instance.writeFile(inputPath, await fetchFile(videoFile));
         }
 
-        // Check threads
         const threads = window.crossOriginIsolated ? Math.min(navigator.hardwareConcurrency || 4, 8) : 1;
-        const cmd = ['-i', inputPath, '-ar', '16000', '-ac', '1', '-map', '0:a:0', '-y', outputName];
+
+        const cmd = ['-i', inputPath, '-vn', '-ar', '16000', '-ac', '1', '-map', '0:a:0', '-y', outputName];
         if (threads > 1) cmd.unshift('-threads', threads.toString());
 
-        console.log("FFmpeg Audio Extraction Command:", cmd.join(" "));
-
+        console.log("[AudioExtract] Command:", cmd.join(" "));
         const ret = await instance.exec(cmd);
 
         if (ret !== 0) {
-            throw new Error(`FFmpeg exited with code ${ret}. Input file might be corrupt or codec unsupported.`);
+            const errorDetails = logBuffer.join('\n');
+            throw new Error(`[AudioExtract] FFmpeg exited with code ${ret}.\nLogs:\n${errorDetails}`);
         }
 
         const data = await instance.readFile(outputName);
 
-        // Decode to Float32Array
         const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
         const bufferContent = data instanceof Uint8Array ? data.buffer : new Uint8Array(data as any).buffer;
         const audioBuffer = await audioCtx.decodeAudioData(bufferContent as ArrayBuffer);
@@ -137,13 +146,10 @@ export async function extractAudioAsWav(videoFile: File): Promise<Float32Array> 
         return audioBuffer.getChannelData(0);
 
     } catch (e: any) {
-        throw new Error(`Audio Extraction Failed: ${e.message}`);
+        throw new Error(`[AudioExtract] Failed: ${e.message}`);
     } finally {
-        // ALWAYS TERMINATE to clear memory
         if (instance) {
-            try {
-                instance.terminate();
-            } catch (e) { console.error("Error terminating ffmpeg", e); }
+            try { instance.terminate(); } catch (e) { }
         }
     }
 }
@@ -152,18 +158,12 @@ export async function extractAudioAsWav(videoFile: File): Promise<Float32Array> 
  * Cancels a specific active conversion by Job ID.
  */
 export async function cancelVideoConversion(jobId?: string) {
-    // ELECTRON
-    // @ts-ignore
-    if (window.electron && window.electron.isElectron) {
-        // @ts-ignore
-        if (window.electron.cancelConversion) {
-            // @ts-ignore
-            await window.electron.cancelConversion(jobId);
-        }
+    const electron = getElectron();
+    if (electron && jobId) {
+        electron.cancelConversion(jobId);
         return;
     }
 
-    // WEB ASSEMBLY
     if (jobId) {
         const job = activeJobs.get(jobId);
         if (job) {
@@ -176,7 +176,6 @@ export async function cancelVideoConversion(jobId?: string) {
             }
         }
     } else {
-        // Fallback: Clear all (safeguard)
         for (const [id, job] of activeJobs.entries()) {
             try { job.terminate(); } catch { }
             activeJobs.delete(id);
@@ -185,59 +184,58 @@ export async function cancelVideoConversion(jobId?: string) {
 }
 
 /**
- * Converts a video file to an MP4 container compatible with browsers.
- * Uses smart mounting for large files. Supports concurrent jobs via jobId.
+ * Converts a video file to an MP4 container.
  */
 export async function convertVideoToMp4(videoFile: File, onProgress: ((progress: number) => void) | undefined, jobId: string): Promise<string> {
-    // ELECTRON NATIVE FALLBACK
-    // @ts-ignore
-    if (window.electron && window.electron.isElectron && (videoFile as any).path) {
-        let cleanup: (() => void) | null = null;
-        // Setup listener for Electron progress
-        // @ts-ignore
-        if (window.electron.onConversionProgress && onProgress) {
-            // @ts-ignore
-            cleanup = window.electron.onConversionProgress((progress: number) => {
-                onProgress(progress);
-            }, jobId); // Pass jobId to electron listener if supported
+    const electron = getElectron();
+    const filePath = (videoFile as any).path;
+
+    // 1. ELECTRON NATIVE PATH
+    if (electron && filePath) {
+        console.log("[Converter] ⚡ Using Native Electron FFmpeg for Conversion:", filePath);
+
+        let cleanup: (() => void) | undefined;
+
+        if (onProgress) {
+            cleanup = electron.onConversionProgress((data: any) => {
+                if (data.jobId === jobId && typeof data.percent === 'number') {
+                    onProgress(Math.round(data.percent));
+                }
+            });
         }
 
         try {
-            // @ts-ignore
-            const inputPath = (videoFile as any).path;
-            // Calculate output path in same directory: replace extension with .mp4
-            const outputPath = inputPath.replace(/\.[^/.\\]+$/, "") + ".mp4";
-
-            // @ts-ignore
-            return await window.electron.convertVideo(inputPath, outputPath, jobId);
+            const outputPath = await electron.convertVideo(filePath, jobId);
+            // Return file:// URL for the frontend to consume/display
+            return `file://${outputPath}`;
+        } catch (e: any) {
+            console.error("Native conversion failed:", e);
+            throw new Error(`Native Conversion Failed: ${e.message}`);
         } finally {
             if (cleanup) cleanup();
         }
     }
 
-    // WEB ASSEMBLY MODE
+    // 2. BROWSER WASM PATH
+    console.log("[Converter] 🐢 Using Browser WASM FFmpeg for Conversion");
     let instance: FFmpeg | null = null;
 
     try {
         instance = await createFreshFFmpeg(onProgress);
-
-        // Register for cancellation
         activeJobs.set(jobId, {
-            terminate: () => {
-                if (instance) {
-                    try { instance.terminate(); } catch { }
-                }
-            }
+            terminate: () => { if (instance) try { instance.terminate(); } catch { } }
         });
-
     } catch (e: any) {
-        throw new Error(`FFmpeg Engine Load Failed: ${e.message}`);
+        throw new Error(`[Converter] FFmpeg Load Failed: ${e.message}`);
     }
 
-    // Accurate Progress Parsing
     let totalDurationSec = 0;
+    const logBuffer: string[] = [];
 
     const logHandler = ({ message }: { message: string }) => {
+        logBuffer.push(message);
+        if (logBuffer.length > 30) logBuffer.shift();
+
         if (message.includes('Duration:') && totalDurationSec === 0) {
             const match = message.match(/Duration:\s*(\d{2}):(\d{2}):(\d{2}\.\d{2})/);
             if (match) {
@@ -258,10 +256,9 @@ export async function convertVideoToMp4(videoFile: File, onProgress: ((progress:
 
     instance.on('log', logHandler);
 
-    // MOUNT STRATEGY
     const MOUNT_THRESHOLD = 256 * 1024 * 1024;
     const useMount = videoFile.size > MOUNT_THRESHOLD;
-    const mountDir = `/data_${jobId.replace(/[^a-zA-Z0-9]/g, '')}`; // Unique mount dir per job
+    const mountDir = `/data_${jobId.replace(/[^a-zA-Z0-9]/g, '')}`;
 
     const mountedFileName = videoFile.name.replace(/['"\s]/g, '_');
     const inputPath = useMount ? `${mountDir}/${mountedFileName}` : `input_${jobId}_${mountedFileName}`;
@@ -279,19 +276,19 @@ export async function convertVideoToMp4(videoFile: File, onProgress: ((progress:
         let ret = -1;
         let strategyError = "";
 
-        // Try Fast Copy first
+        // Attempt 1: Copy Stream (Fast)
         try {
             const cmdCopy = ['-i', inputPath, '-c:v', 'copy', '-c:a', 'aac', '-strict', 'experimental', '-y', outputName];
-            console.log("Attempt 1 (Fast Copy):", cmdCopy.join(" "));
+            console.log("[Converter] Attempt 1 (Fast Copy):", cmdCopy.join(" "));
             ret = await instance.exec(cmdCopy);
         } catch (e: any) {
             console.warn("Fast copy exec crashed:", e);
         }
 
+        // Attempt 2: Re-encode (Slow)
         if (ret !== 0) {
-            console.warn("Fast copy failed. Re-encoding (this may be very slow)...");
+            console.warn("[Converter] Fast copy failed. Re-encoding...");
             try {
-                // Using ultrafast preset for speed
                 const cmdEncode = ['-i', inputPath, '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac', '-y', outputName];
                 ret = await instance.exec(cmdEncode);
             } catch (e: any) {
@@ -300,10 +297,10 @@ export async function convertVideoToMp4(videoFile: File, onProgress: ((progress:
         }
 
         if (ret !== 0) {
-            throw new Error(`Conversion Failed (Code ${ret}). ${strategyError}`);
+            const logs = logBuffer.join('\n');
+            throw new Error(`[Converter] Failed (Code ${ret}). ${strategyError}\nLogs:\n${logs}`);
         }
 
-        // Read Output
         let data;
         try {
             data = await instance.readFile(outputName);
@@ -311,20 +308,18 @@ export async function convertVideoToMp4(videoFile: File, onProgress: ((progress:
             throw new Error(`Output Read Failed: ${e.message}`);
         }
 
-        // Success: Create Blob
         const blob = new Blob([data as any], { type: 'video/mp4' });
         return URL.createObjectURL(blob);
 
     } catch (e: any) {
-        throw new Error(`Process Error: ${e.message}`);
+        throw new Error(`[Converter] Process Error: ${e.message}`);
     } finally {
-        // CRITICAL: Terminate to free memory for next item in queue
         if (instance) {
             try {
                 instance.off('log', logHandler);
                 instance.terminate();
-                console.log("[Converter] FFmpeg instance terminated to free memory.");
-            } catch (e) { console.error("Error terminating ffmpeg", e); }
+                console.log("[Converter] Instance terminated.");
+            } catch (e) { }
         }
         activeJobs.delete(jobId);
     }

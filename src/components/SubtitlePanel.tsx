@@ -9,13 +9,13 @@ interface SubtitlePanelProps {
     isProcessing: boolean;
     isAnyProcessing: boolean;
     isOffline: boolean;
-    setIsOffline: (val: boolean) => void;
+    // setIsOffline prop removed as status is now determined by settings
     videoSrc: string | null;
     isConverting: boolean;
     onGenerate: () => void;
     onImport: (e: React.ChangeEvent<HTMLInputElement>) => void;
     onExport: (format: 'srt' | 'vtt') => void;
-
+    
     // Editing
     editingSegmentIndex: number;
     editText: string;
@@ -34,7 +34,7 @@ interface SubtitlePanelProps {
 }
 
 export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
-    width, subtitles, currentSegmentIndex, isProcessing, isAnyProcessing, isOffline, setIsOffline,
+    width, subtitles, currentSegmentIndex, isProcessing, isAnyProcessing, isOffline,
     videoSrc, isConverting, onGenerate, onImport, onExport,
     editingSegmentIndex, editText, editStart, editEnd,
     onStartEdit, onSaveEdit, onCancelEdit, setEditText, setEditStart, setEditEnd,
@@ -64,10 +64,10 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
     }, [currentSegmentIndex, editingSegmentIndex]);
 
     const isGenerateDisabled = !videoSrc || (isAnyProcessing && !isProcessing);
-    const generateButtonTitle = !videoSrc
-        ? "Load a video first"
-        : (isAnyProcessing && !isProcessing)
-            ? "Another video is currently generating subtitles. Please wait."
+    const generateButtonTitle = !videoSrc 
+        ? "Load a video first" 
+        : (isAnyProcessing && !isProcessing) 
+            ? "Another video is currently generating subtitles. Please wait." 
             : "";
 
     return (
@@ -81,13 +81,14 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
                         <ListVideo className="text-blue-500" />
                         <h2 className="font-bold text-lg">Transcript</h2>
                     </div>
-                    <button
-                        onClick={() => setIsOffline(!isOffline)}
-                        className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${isOffline ? 'bg-green-900/20 border-green-800 text-green-400' : 'bg-blue-900/20 border-blue-800 text-blue-400'}`}
+                    {/* Read-only Offline/Online Indicator */}
+                    <div
+                        className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border transition-all cursor-default select-none ${isOffline ? 'bg-green-900/20 border-green-800 text-green-400' : 'bg-blue-900/20 border-blue-800 text-blue-400'}`}
+                        title="Change mode in Settings"
                     >
                         {isOffline ? <WifiOff size={14} /> : <Wifi size={14} />}
                         <span>{isOffline ? 'Offline' : 'Online'}</span>
-                    </button>
+                    </div>
                 </div>
 
                 {/* GENERATE / IMPORT / EXPORT TOOLBAR */}
@@ -96,12 +97,13 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
                         onClick={onGenerate}
                         disabled={isGenerateDisabled}
                         title={generateButtonTitle}
-                        className={`flex items-center justify-center gap-2 py-2 px-3 text-xs font-bold rounded transition-colors ${isProcessing
-                                ? 'bg-red-600 hover:bg-red-500 text-white'
+                        className={`flex items-center justify-center gap-2 py-2 px-3 text-xs font-bold rounded transition-colors ${
+                            isProcessing 
+                                ? 'bg-red-600 hover:bg-red-500 text-white' 
                                 : isGenerateDisabled
                                     ? 'bg-gray-800 text-gray-500 cursor-not-allowed'
                                     : 'bg-blue-600 hover:bg-blue-500 text-white'
-                            }`}
+                        }`}
                     >
                         {isProcessing ? <Square size={14} fill="currentColor" /> : <PlayCircle size={14} />}
                         <span>{isProcessing ? 'Stop' : 'Generate'}</span>
@@ -242,7 +244,7 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
                                                     onCancelEdit();
                                                 }
                                             }}
-                                            onClick={(e) => e.stopPropagation()}
+                                            onClick={(e) => e.stopPropagation()} 
                                             className="w-full bg-gray-900 text-white text-sm p-2 rounded border border-blue-500 focus:outline-none resize-none"
                                             rows={Math.max(2, Math.ceil(editText.length / 40))}
                                         />

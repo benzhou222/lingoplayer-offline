@@ -16,7 +16,9 @@ export const useAppSettings = () => {
     // UI State
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [settingsTab, setSettingsTab] = useState<'online' | 'local'>('local');
-    const [isOffline, setIsOffline] = useState(true);
+    
+    // Derived State: Offline status is now strictly determined by the settings tab
+    const isOffline = settingsTab === 'local';
 
     // Configuration State with LocalStorage Initialization
     const [segmentationMethod, setSegmentationMethod] = useState<SegmentationMethod>(() => (localStorage.getItem('lingo_segmentation') as SegmentationMethod) || 'fixed');
@@ -73,7 +75,7 @@ export const useAppSettings = () => {
     return {
         isSettingsOpen, setIsSettingsOpen,
         settingsTab, setSettingsTab,
-        isOffline, setIsOffline,
+        isOffline, // Derived
         segmentationMethod, setSegmentationMethod,
         vadSettings, setVadSettings,
         syncThreshold, setSyncThreshold,

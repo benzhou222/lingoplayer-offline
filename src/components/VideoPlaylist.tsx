@@ -89,7 +89,7 @@ export const VideoPlaylist: React.FC<VideoPlaylistProps> = ({
                         const key = `${file.name}-${file.size}`;
                         const status = videoStatuses[key] || { converting: false, progress: 0, done: false, queued: false };
                         const isConvertingOrQueued = status.converting || status.queued;
-
+                        
                         // Check if this specific video is the one generating subtitles
                         const isGeneratingSubtitles = processingVideoKey === key;
 
@@ -142,7 +142,7 @@ export const VideoPlaylist: React.FC<VideoPlaylistProps> = ({
 
                                 {/* Actions Overlay */}
                                 <div className="absolute inset-0 z-20 pointer-events-none">
-                                    <div
+                                    <div 
                                         className={`absolute top-2 right-2 flex gap-2 pointer-events-auto transition-opacity duration-200 ${isConvertingOrQueued ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
                                         onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); }}
                                         onClick={(e) => { e.stopPropagation(); e.preventDefault(); }}

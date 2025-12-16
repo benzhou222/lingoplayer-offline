@@ -125,7 +125,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     >
                         <div className="flex items-center justify-center gap-2">
                             <Server size={16} />
-                            Local AI
+                            Offline
                         </div>
                     </button>
                     <button
@@ -134,7 +134,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     >
                         <div className="flex items-center justify-center gap-2">
                             <Cloud size={16} />
-                            Online (Gemini)
+                            Online
                         </div>
                     </button>
                 </div>

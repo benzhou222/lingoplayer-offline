@@ -3,7 +3,8 @@ import { Upload, BookOpen, Settings, GripHorizontal, LayoutList, AlertCircle, Tr
 import { SubtitleSegment, WordDefinition, VocabularyItem, PlaybackMode } from './types';
 import { generateSubtitles, getWordDefinition, getAudioData, cancelSubtitleGeneration } from './services/geminiService';
 import { convertVideoToMp4, cancelVideoConversion } from './services/converterService';
-import { segmentsToSRT, segmentsToVTT, parseSubtitleFile } from './utils/subtitleUtils';
+import { segmentsToSRT, segmentsToVTT, parseSubtitleFile, parseSubtitleContent } from './utils/subtitleUtils';
+import { saveFullPlaylistToDB, loadFullPlaylistFromDB } from './utils/storageUtils';
 
 // Components
 import { VideoControls } from './components/VideoControls';
@@ -64,6 +65,9 @@ export default function App() {
     // Subtitle Persistence: Map "filename-size" -> SubtitleSegment[]
     const [videoSubtitlesMap, setVideoSubtitlesMap] = useState<Record<string, SubtitleSegment[]>>({});
 
+    // Progress Persistence: Map "filename-size" -> number (seconds)
+    const [playbackProgressMap, setPlaybackProgressMap] = useState<Record<string, number>>({});
+
     // Conversion
     // isConverting is now just a general flag if ANY conversion is happening (optional, for UI hints)
     const [isConverting, setIsConverting] = useState(false);
@@ -74,6 +78,9 @@ export default function App() {
     const [videoList, setVideoList] = useState<File[]>([]);
     const [videoStatuses, setVideoStatuses] = useState<Record<string, { converting: boolean, progress: number, done: boolean, queued?: boolean }>>({});
     const [draggedVideoIndex, setDraggedVideoIndex] = useState<number | null>(null);
+
+    // Playlist Persistence State
+    const [isPlaylistLoaded, setIsPlaylistLoaded] = useState(false);
 
     // Editing & UI
     const [editingSegmentIndex, setEditingSegmentIndex] = useState<number>(-1);
@@ -97,6 +104,40 @@ export default function App() {
     const pendingSeekTimeRef = useRef<number | null>(null);
     const lastSaveTimeRef = useRef<number>(0);
 
+    // Auto-Save Timer Ref to debounce IndexedDB writes
+    const autoSaveTimerRef = useRef<any>(null);
+
+    // --- PLAYLIST PERSISTENCE (LOAD) ---
+    useEffect(() => {
+        const initPlaylist = async () => {
+            try {
+                const { files, subtitlesMap, progressMap } = await loadFullPlaylistFromDB();
+                if (files && files.length > 0) {
+                    setVideoList(files);
+                    setVideoSubtitlesMap(subtitlesMap);
+                    setPlaybackProgressMap(progressMap);
+                    setShowVideoList(true);
+                }
+            } catch (e) {
+                console.error("Failed to load playlist", e);
+            } finally {
+                setIsPlaylistLoaded(true);
+            }
+        };
+        initPlaylist();
+    }, []);
+
+    // --- PLAYLIST PERSISTENCE (AUTO-SAVE) ---
+    useEffect(() => {
+        if (isPlaylistLoaded) {
+            if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+            autoSaveTimerRef.current = setTimeout(() => {
+                saveFullPlaylistToDB(videoList, videoSubtitlesMap, playbackProgressMap)
+                    .catch(e => console.error("Auto-save playlist failed", e));
+            }, 2000); // Save every 2 seconds if changes occur
+        }
+    }, [videoList, videoSubtitlesMap, playbackProgressMap, isPlaylistLoaded]);
+
     // --- HELPERS ---
     const updateSubtitles = useCallback((newSegments: SubtitleSegment[], file: File | null = videoFile) => {
         if (file) {
@@ -116,6 +157,72 @@ export default function App() {
     useEffect(() => {
         currentVideoFileRef.current = videoFile;
     }, [videoFile]);
+
+    // --- AUTO-SUBTITLE LOADER ---
+    const autoLoadSubtitles = async (files: File[], newFile: File) => {
+        const key = `${newFile.name}-${newFile.size}`;
+        if (videoSubtitlesMap[key]) return; // Already exists
+
+        const baseName = newFile.name.replace(/\.[^/.]+$/, "");
+
+        // Strategy 1: Check sibling files in the drop batch (Web/Drag-Drop)
+        const sibling = files.find(f => {
+            const fName = f.name.replace(/\.[^/.]+$/, "");
+            const ext = f.name.split('.').pop()?.toLowerCase();
+            return fName === baseName && (ext === 'srt' || ext === 'vtt');
+        });
+
+        if (sibling) {
+            try {
+                const segs = await parseSubtitleFile(sibling);
+                const mapped = segs.map((s, i) => ({ ...s, id: i }));
+                setVideoSubtitlesMap(prev => ({ ...prev, [key]: mapped }));
+                console.log(`[AutoSub] Loaded sibling for ${newFile.name} from batch`);
+                // If this is the currently loaded video, update immediately
+                if (videoFile && videoFile.name === newFile.name) setSubtitles(mapped);
+                return;
+            } catch (e) { console.warn("Failed to parse sibling subtitle", e); }
+        }
+
+        // Strategy 2: Check File System (Electron Only) - Using Native Node FS
+        // @ts-ignore
+        if (window.electron && window.electron.isElectron && newFile.path) {
+            try {
+                // Since nodeIntegration is true, we can dynamically require 'fs' and 'path'
+                // This bypasses webSecurity fetch restrictions
+                // @ts-ignore
+                const fs = window.require('fs');
+                // @ts-ignore
+                const path = window.require('path');
+
+                // @ts-ignore
+                const videoPath = newFile.path;
+                const dir = path.dirname(videoPath);
+                const nameNoExt = path.basename(videoPath, path.extname(videoPath));
+                const exts = ['.srt', '.vtt'];
+
+                for (const ext of exts) {
+                    const subPath = path.join(dir, nameNoExt + ext);
+                    if (fs.existsSync(subPath)) {
+                        console.log(`[AutoSub] Found sidecar via FS: ${subPath}`);
+                        const text = fs.readFileSync(subPath, 'utf8');
+                        const segs = parseSubtitleContent(text);
+                        const mapped = segs.map((s: any, i: number) => ({ ...s, id: i }));
+
+                        setVideoSubtitlesMap(prev => ({ ...prev, [key]: mapped }));
+
+                        // If this is the currently loaded video, update immediately
+                        if (videoFile && videoFile.name === newFile.name) {
+                            setSubtitles(mapped);
+                        }
+                        return; // Stop after first success
+                    }
+                }
+            } catch (e) {
+                console.warn("Electron FS sidecar search failed", e);
+            }
+        }
+    };
 
     // --- CONVERSION LOGIC ---
 
@@ -140,31 +247,71 @@ export default function App() {
             }));
 
             // @ts-ignore
-            const isElectron = window.electron && window.electron.isElectron;
-            try {
-                let fetchUrl = convertedUrl;
-                if (isElectron && !convertedUrl.startsWith('blob:') && !convertedUrl.includes('://')) {
-                    fetchUrl = `file://${convertedUrl}`;
-                }
-                const blob = await fetch(fetchUrl).then(r => r.blob());
-                const newName = file.name.replace(/\.[^/.]+$/, "") + ".mp4";
-                const newFile = new File([blob], newName, { type: 'video/mp4' });
-                // @ts-ignore
-                if (isElectron) newFile.path = convertedUrl;
-                setVideoList(prev => [...prev, newFile]);
-            } catch (e) { console.warn("Could not auto-add converted video to list.", e); }
+            const isElectron = (window.electron && window.electron.isElectron) || (window.process && window.process.versions && window.process.versions.electron);
 
-            if (!isElectron) {
+            if (isElectron && (file as any).path) {
+                try {
+                    // ELECTRON: File is already saved to disk by Native FFmpeg at `convertedUrl` (which is file://...)
+                    // We just need to register it in the UI list.
+
+                    // @ts-ignore
+                    const path = window.require('path');
+                    // @ts-ignore
+                    const originalPath = (file as any).path;
+                    const dir = path.dirname(originalPath);
+                    const name = path.parse(originalPath).name;
+                    const newPath = path.join(dir, `${name}.mp4`);
+
+                    // Create new File object for the playlist that points to the local path
+                    // Note: We don't read the blob content here, just creating a reference.
+                    const newFile = new File([""], `${name}.mp4`, { type: 'video/mp4' });
+
+                    // CRITICAL FIX: 'path' property is read-only on File objects in Electron/Chrome.
+                    // We must use Object.defineProperty to set it.
+                    Object.defineProperty(newFile, 'path', {
+                        value: newPath,
+                        writable: false,
+                        enumerable: false, // Don't show up in normal enumeration if not desired
+                        configurable: true
+                    });
+
+                    // Fake size just so it looks okay in UI (optional, or read via fs.statSync if needed)
+                    // @ts-ignore
+                    const fs = window.require('fs');
+                    try {
+                        const stats = fs.statSync(newPath);
+                        Object.defineProperty(newFile, 'size', { value: stats.size });
+                    } catch (e) { }
+
+                    setVideoList(prev => [...prev, newFile]);
+                    autoLoadSubtitles(videoList, newFile);
+
+                } catch (saveErr: any) {
+                    console.error("Failed to register converted file in Electron:", saveErr);
+                    // Don't alert here, it might just be a UI update issue, the file is likely safe.
+                }
+            } else {
+                // WEB: Prompt download
                 const a = document.createElement('a');
                 a.href = convertedUrl;
                 a.download = file.name.replace(/\.[^/.]+$/, "") + ".mp4";
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);
+
+                // Add to list for immediate usage (blob based)
+                try {
+                    const blob = await fetch(convertedUrl).then(r => r.blob());
+                    const newFile = new File([blob], file.name.replace(/\.[^/.]+$/, "") + ".mp4", { type: 'video/mp4' });
+                    setVideoList(prev => [...prev, newFile]);
+                    autoLoadSubtitles(videoList, newFile);
+                } catch (e) { }
             }
+
         } catch (error: any) {
             const errMsg = error.message || "";
-            if (!errMsg.includes("terminated") && !errMsg.includes("Code -1")) {
+            // Ignore cancellation errors
+            if (!errMsg.includes("terminated") && !errMsg.includes("Code -1") && !errMsg.includes("SIGKILL")) {
                 alert(`Conversion failed for ${file.name}: ${errMsg}`);
             }
             // Reset status on error
@@ -182,37 +329,44 @@ export default function App() {
     // Effect to process the queue: now concurrent!
     useEffect(() => {
         if (conversionQueue.length === 0) return;
-
-        // Copy currently queued items to avoid race conditions with dependency array
         const batch = [...conversionQueue];
-
-        // Clear queue immediately so we don't re-process them
         setConversionQueue([]);
-
         batch.forEach(key => {
-            // Find file
             const file = videoList.find(f => `${f.name}-${f.size}` === key);
             if (file) {
                 startConversion(file, key);
             }
         });
-
     }, [conversionQueue, videoList, startConversion]);
 
 
     // Playlist Handlers
-    const handleBatchUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const handleBatchUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
         if (event.target.files && event.target.files.length > 0) {
             const newFiles = Array.from(event.target.files);
+
+            // 1. Add to list
             setVideoList(prev => {
                 const combined = [...prev];
                 newFiles.forEach(f => {
+                    // Only add if not duplicate
                     if (!combined.some(existing => existing.name === f.name && existing.size === f.size)) {
                         combined.push(f);
                     }
                 });
                 return combined;
             });
+
+            // 2. Auto-Scan Subtitles for newly added videos
+            // We pass the entire new batch so we can find pairs (video + srt dragged together)
+            const allFilesContext = [...videoList, ...newFiles];
+
+            for (const f of newFiles) {
+                const isVideo = f.type.startsWith('video') || f.name.match(/\.(mp4|mkv|webm|avi|mov|wmv)$/i);
+                if (isVideo) {
+                    await autoLoadSubtitles(allFilesContext, f);
+                }
+            }
         }
         event.target.value = '';
     };
@@ -221,8 +375,6 @@ export default function App() {
         e.stopPropagation();
         const key = `${file.name}-${file.size}`;
         if (conversionQueue.includes(key) || videoStatuses[key]?.converting) return;
-
-        // Mark as queued visually first
         setVideoStatuses(prev => ({
             ...prev,
             [key]: { converting: false, progress: 0, done: false, queued: true }
@@ -238,30 +390,13 @@ export default function App() {
         }));
     }, []);
 
-    const handleRemoveFromQueue = (e: React.MouseEvent, file: File) => {
-        e.stopPropagation();
-        const key = `${file.name}-${file.size}`;
-
-        // If it's running or queued, cancel it
-        if (videoStatuses[key]?.converting || videoStatuses[key]?.queued) {
-            handleCancelConversion(key);
-        }
-
-        // Also ensure it's removed from pending queue state if not yet picked up
-        setConversionQueue(prev => prev.filter(k => k !== key));
-
-        // Clean status
-        setVideoStatuses(prev => {
-            const next = { ...prev };
-            delete next[key];
-            return next;
-        });
-    };
-
     const handleDeleteVideo = (e: React.MouseEvent, index: number) => {
         e.stopPropagation();
         if (window.confirm("Remove video from list?")) {
+            const fileToRemove = videoList[index];
             setVideoList(prev => prev.filter((_, i) => i !== index));
+            // Optional: clean up subtitle map/progress map? 
+            // Better to keep in case user re-adds.
         }
     };
 
@@ -319,33 +454,28 @@ export default function App() {
     }, [editingSegmentIndex, cancelEdit]);
 
     // --- SUBTITLE GENERATION ---
-    const handleGenerate = async (testMode: boolean = false, fileOverride?: File) => {
-        const fileToUse = fileOverride || videoFile;
-        if (!fileToUse) return;
+    const handleGenerate = async (testMode: boolean = false) => {
+        if (!videoFile) return;
 
-        const fileKey = `${fileToUse.name}-${fileToUse.size}`;
+        // Check if placeholder
+        if ((videoFile as any).isPlaceholder) {
+            alert("Cannot generate subtitles for a placeholder file. Please reload the original video.");
+            return;
+        }
 
-        // If this specific file is already processing, stop it.
+        const fileKey = `${videoFile.name}-${videoFile.size}`;
         if (processingVideoKey === fileKey) {
             cancelSubtitleGeneration();
             setProcessingVideoKey(null);
-            processingIdRef.current += 1; // Invalidate callback for this specific run
+            processingIdRef.current += 1;
             return;
         }
-
-        // If ANY file is processing (but not this one), block new generation.
-        if (processingVideoKey) {
-            // Concurrency block: Do not allow starting a new one if one is running
-            return;
-        }
+        if (processingVideoKey) return;
 
         const currentId = processingIdRef.current + 1;
         processingIdRef.current = currentId;
-
-        // Set status
         setProcessingVideoKey(fileKey);
 
-        // Only clear view if we are looking at the file we are about to generate for
         if (videoFile && `${videoFile.name}-${videoFile.size}` === fileKey) {
             setSubtitles([]);
             setCurrentSegmentIndex(-1);
@@ -353,23 +483,21 @@ export default function App() {
         }
 
         setSelectedWord(null);
-        player.setIsPlaying(false);
+        // We do NOT pause here anymore, allowing playback to continue
         lockStateRef.current = null;
 
         if (settings.isOffline && !settings.localASRConfig.enabled && settings.modelStatus === 'idle') settings.setModelStatus('loading');
 
         try {
             let audioDataForProcess = audioDataCacheRef.current;
-            // If we are generating for a file that is not currently loaded in player, we can't use the cache
             if (videoFile && `${videoFile.name}-${videoFile.size}` !== fileKey) {
                 audioDataForProcess = null;
             }
 
             if (!audioDataForProcess) {
-                const decoded = await getAudioData(fileToUse, true);
+                const decoded = await getAudioData(videoFile, true);
                 if (typeof decoded !== 'string') {
                     audioDataForProcess = decoded;
-                    // Only cache if it matches current video
                     if (videoFile && `${videoFile.name}-${videoFile.size}` === fileKey) {
                         audioDataCacheRef.current = decoded;
                     }
@@ -377,14 +505,10 @@ export default function App() {
             }
 
             await generateSubtitles(
-                fileToUse,
+                videoFile,
                 (newSegments) => {
-                    // This callback runs repeatedly as chunks finish
                     if (processingIdRef.current === currentId) {
-                        // 1. Always update the background Map
                         setVideoSubtitlesMap(prev => ({ ...prev, [fileKey]: newSegments }));
-
-                        // 2. If the user is currently looking at this video, update the UI
                         const current = currentVideoFileRef.current;
                         if (current && `${current.name}-${current.size}` === fileKey) {
                             setSubtitles(newSegments);
@@ -400,7 +524,6 @@ export default function App() {
         } catch (error: any) {
             console.error("Subtitle generation failed", error);
             if (processingIdRef.current === currentId) {
-                // Only show error if we are looking at the video
                 if (videoFile && `${videoFile.name}-${videoFile.size}` === fileKey) {
                     setErrorMsg(error.message || "Generation Failed");
                 }
@@ -433,9 +556,21 @@ export default function App() {
 
     // --- VIDEO LOADING ---
     const loadVideoFromFile = useCallback(async (file: File) => {
-        // DO NOT cancel ongoing subtitle generation here.
-        // If a job is running for Video A, and we switch to Video B, let Video A finish in background.
-        // We only change the UI state.
+        // More robust Electron check
+        // @ts-ignore
+        const isElectron = (window.electron && window.electron.isElectron) || (window.process && window.process.versions && window.process.versions.electron);
+        const filePath = (file as any).path;
+
+        // --- 1. Placeholder Check (Web Security) ---
+        // If it's a placeholder (restored from DB), we can ONLY play it if we are in Electron and have a path.
+        if ((file as any).isPlaceholder) {
+            if (!isElectron || !filePath) {
+                alert(`Due to browser security, please re-select or drag-and-drop "${file.name}" to play it.`);
+                return;
+            }
+        }
+
+        const key = `${file.name}-${file.size}`;
 
         player.setCurrentTime(0);
         player.setDuration(0);
@@ -447,49 +582,50 @@ export default function App() {
         audioDataCacheRef.current = null;
         lockStateRef.current = null;
 
-        const progKey = `lingo_prog_${file.name}_${file.size}`;
-        const savedTimeStr = localStorage.getItem(progKey);
-        pendingSeekTimeRef.current = savedTimeStr ? parseFloat(savedTimeStr) : null;
+        // Restore progress from map
+        const savedTime = playbackProgressMap[key] || 0;
+        pendingSeekTimeRef.current = savedTime > 0 ? savedTime : null;
 
         setVideoFile(file);
-        setVideoSrc(URL.createObjectURL(file));
+
+        // --- 2. Electron Path vs Web Blob ---
+        if (isElectron && filePath) {
+            // CRITICAL FIX: Handle Windows paths and encoding for file:// protocol
+            const safePath = filePath.replace(/\\/g, '/');
+            const encodedPath = safePath.split('/').map(encodeURIComponent).join('/');
+            // Windows drive letters (e.g., "C%3A") usually work fine encoded, but just in case of issues:
+            // A simpler robust method for many electron versions:
+            setVideoSrc(`file://${encodeURI(safePath)}`);
+        } else {
+            // Standard web behavior
+            setVideoSrc(URL.createObjectURL(file));
+        }
 
         setTimeout(() => { if (player.videoRef.current) { player.videoRef.current.play().catch(() => { }); player.setIsPlaying(true); } }, 100);
 
         // Subtitle Loading Strategy:
-        // 1. Check in-memory map (User generated/loaded previously in this session)
-        // 2. Check sibling file in playlist
-        const key = `${file.name}-${file.size}`;
-
+        // 1. Check in-memory map (loaded from DB or generated)
         if (videoSubtitlesMap[key]) {
             setSubtitles(videoSubtitlesMap[key]);
         } else {
             setSubtitles([]);
-            // Auto-load Sibling Subtitles
-            const baseName = file.name.replace(/\.[^/.]+$/, "");
-            const sibling = videoList.find(f => {
-                const fName = f.name.replace(/\.[^/.]+$/, "");
-                const ext = f.name.split('.').pop()?.toLowerCase();
-                return fName === baseName && (ext === 'srt' || ext === 'vtt');
-            });
-
-            if (sibling) {
-                try {
-                    const segs = await parseSubtitleFile(sibling);
-                    const mapped = segs.map((s, i) => ({ ...s, id: i }));
-                    setSubtitles(mapped);
-                    // Also save to map so we don't re-parse constantly
-                    setVideoSubtitlesMap(prev => ({ ...prev, [key]: mapped }));
-                } catch (e) { }
-            }
         }
-    }, [videoList, player, videoSubtitlesMap]);
+    }, [videoList, player, videoSubtitlesMap, playbackProgressMap]);
 
     const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+        // This is the single file input (top right)
         const file = event.target.files?.[0];
         if (!file) return;
+
+        // Add to list if not present
         setVideoList(prev => prev.some(f => f.name === file.name && f.size === file.size) ? prev : [...prev, file]);
         setShowVideoList(true);
+
+        // Try auto load subs for this single file
+        // We pass current list + new file as context
+        await autoLoadSubtitles([...videoList, file], file);
+
+        // Load it
         loadVideoFromFile(file);
         event.target.value = '';
     };
@@ -502,9 +638,11 @@ export default function App() {
                 const time = player.videoRef.current.currentTime;
                 player.setCurrentTime(time);
 
+                // Debounced progress update (updates React state which eventually updates DB)
                 const now = Date.now();
                 if (now - lastSaveTimeRef.current > 1000 && videoFile) {
-                    localStorage.setItem(`lingo_prog_${videoFile.name}_${videoFile.size}`, time.toString());
+                    const key = `${videoFile.name}-${videoFile.size}`;
+                    setPlaybackProgressMap(prev => ({ ...prev, [key]: time }));
                     lastSaveTimeRef.current = now;
                 }
 
@@ -658,7 +796,7 @@ export default function App() {
                 isProcessing={!!isProcessingCurrent}
                 isAnyProcessing={!!processingVideoKey}
                 isOffline={settings.isOffline}
-                setIsOffline={settings.setIsOffline}
+                // setIsOffline removed here
                 videoSrc={videoSrc}
                 isConverting={isConverting}
                 onGenerate={() => handleGenerate(false)}
@@ -703,7 +841,7 @@ export default function App() {
                         </label>
                         <button onClick={() => setShowVideoList(!showVideoList)} className={`p-2 rounded-lg transition-colors ${showVideoList ? 'text-blue-400 bg-blue-900/20' : 'text-gray-400 hover:text-white hover:bg-gray-800'}`}><LayoutList size={20} /></button>
                         <div className="w-px h-6 bg-gray-800 mx-1"></div>
-                        <button onClick={() => { settings.setSettingsTab('local'); settings.setIsSettingsOpen(true); }} className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors"><Settings size={20} /></button>
+                        <button onClick={() => settings.setIsSettingsOpen(true)} className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors"><Settings size={20} /></button>
                         <button onClick={() => setShowVocabSidebar(!showVocabSidebar)} className={`p-2 rounded-lg transition-colors ${showVocabSidebar ? 'text-blue-400 bg-blue-900/20' : 'text-gray-400 hover:text-white'}`}><BookOpen size={20} /></button>
                     </div>
                 </div>

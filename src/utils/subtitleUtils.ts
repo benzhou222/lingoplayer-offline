@@ -1,3 +1,4 @@
+
 import { SubtitleSegment } from "../types";
 
 // --- FORMATTERS (Export) ---
@@ -52,8 +53,10 @@ const parseTimestamp = (timeStr: string): number => {
   return 0;
 };
 
-export const parseSubtitleFile = async (file: File): Promise<SubtitleSegment[]> => {
-  const text = await file.text();
+/**
+ * Parses raw subtitle text content (SRT or VTT) into segments.
+ */
+export const parseSubtitleContent = (text: string): SubtitleSegment[] => {
   const segments: SubtitleSegment[] = [];
   
   // Normalize line endings
@@ -62,8 +65,6 @@ export const parseSubtitleFile = async (file: File): Promise<SubtitleSegment[]> 
   // Regex strategies
   // SRT: Number\nTimestamp --> Timestamp\nText
   // VTT: (Optional ID\n)Timestamp --> Timestamp\nText
-  
-  const isVTT = normalizedText.trim().startsWith('WEBVTT');
   
   // Split by double newlines to get blocks
   const blocks = normalizedText.split(/\n\n+/);
@@ -104,4 +105,9 @@ export const parseSubtitleFile = async (file: File): Promise<SubtitleSegment[]> 
   });
 
   return segments;
+}
+
+export const parseSubtitleFile = async (file: File): Promise<SubtitleSegment[]> => {
+  const text = await file.text();
+  return parseSubtitleContent(text);
 };
