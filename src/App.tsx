@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Upload, BookOpen, Settings, GripHorizontal, LayoutList, AlertCircle, Trash2 } from 'lucide-react';
+import { Upload, BookOpen, Settings, GripHorizontal, LayoutList, AlertCircle, Trash2, Download, FileUp } from 'lucide-react';
 import { SubtitleSegment, WordDefinition, VocabularyItem, PlaybackMode } from './types';
 import { generateSubtitles, getWordDefinition, getAudioData, cancelSubtitleGeneration } from './services/geminiService';
 import { convertVideoToMp4, cancelVideoConversion } from './services/converterService';
@@ -92,7 +92,18 @@ export default function App() {
     const [processingVideoKey, setProcessingVideoKey] = useState<string | null>(null);
 
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
-    const [vocabulary, setVocabulary] = useState<VocabularyItem[]>([]);
+
+    // Vocabulary State (with persistence)
+    const [vocabulary, setVocabulary] = useState<VocabularyItem[]>(() => {
+        try {
+            const saved = localStorage.getItem('lingo_vocabulary');
+            return saved ? JSON.parse(saved) : [];
+        } catch (e) {
+            console.error("Failed to load vocabulary", e);
+            return [];
+        }
+    });
+
     const [selectedWord, setSelectedWord] = useState<WordDefinition | null>(null);
     const [loadingWord, setLoadingWord] = useState(false);
     const [showVocabSidebar, setShowVocabSidebar] = useState(false);
@@ -106,6 +117,11 @@ export default function App() {
 
     // Auto-Save Timer Ref to debounce IndexedDB writes
     const autoSaveTimerRef = useRef<any>(null);
+
+    // --- VOCABULARY PERSISTENCE ---
+    useEffect(() => {
+        localStorage.setItem('lingo_vocabulary', JSON.stringify(vocabulary));
+    }, [vocabulary]);
 
     // --- PLAYLIST PERSISTENCE (LOAD) ---
     useEffect(() => {
@@ -776,6 +792,63 @@ export default function App() {
     };
     const addToVocab = (wordDef: WordDefinition) => { if (!vocabulary.some(v => v.word === wordDef.word)) setVocabulary(prev => [{ ...wordDef, id: crypto.randomUUID(), addedAt: Date.now() }, ...prev]); };
 
+    // --- VOCABULARY EXPORT/IMPORT ---
+    const handleExportVocab = () => {
+        if (vocabulary.length === 0) {
+            alert("Vocabulary list is empty.");
+            return;
+        }
+        const dataStr = JSON.stringify(vocabulary, null, 2);
+        const blob = new Blob([dataStr], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `lingoplayer_vocab_${new Date().toISOString().split('T')[0]}.json`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+    };
+
+    const handleImportVocab = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            try {
+                const json = JSON.parse(event.target?.result as string);
+                if (Array.isArray(json)) {
+                    setVocabulary(prev => {
+                        const existingWords = new Set(prev.map(v => v.word.toLowerCase()));
+                        const newItems = json.filter((item: any) =>
+                            item.word && !existingWords.has(item.word.toLowerCase())
+                        ).map((item: any) => ({
+                            ...item,
+                            id: item.id || crypto.randomUUID(),
+                            addedAt: item.addedAt || Date.now()
+                        }));
+
+                        if (newItems.length === 0) {
+                            alert("No new words found in file.");
+                            return prev;
+                        }
+
+                        alert(`Imported ${newItems.length} new words.`);
+                        return [...newItems, ...prev];
+                    });
+                } else {
+                    alert("Invalid file format. Expected a JSON array.");
+                }
+            } catch (error) {
+                console.error("Import failed", error);
+                alert("Failed to parse the vocabulary file.");
+            }
+        };
+        reader.readAsText(file);
+        e.target.value = '';
+    };
+
     // Derived prop for UI components
     const isProcessingCurrent = videoFile && processingVideoKey === `${videoFile.name}-${videoFile.size}`;
 
@@ -942,7 +1015,18 @@ export default function App() {
 
             {showVocabSidebar && (
                 <div style={{ width: layout.rightPanelWidth }} className="bg-gray-950 border-l border-gray-800 flex flex-col flex-shrink-0 hidden md:flex">
-                    <div className="p-4 border-b border-gray-800 bg-gray-900/50 flex items-center justify-between"><div className="flex items-center gap-2"><BookOpen className="text-blue-500" /><h2 className="font-bold text-lg">Vocabulary</h2></div></div>
+                    <div className="p-4 border-b border-gray-800 bg-gray-900/50 flex items-center justify-between">
+                        <div className="flex items-center gap-2"><BookOpen className="text-blue-500" /><h2 className="font-bold text-lg">Vocabulary</h2></div>
+                        <div className="flex items-center gap-1">
+                            <label className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors cursor-pointer" title="Import JSON">
+                                <FileUp size={16} />
+                                <input type="file" accept=".json" onChange={handleImportVocab} className="hidden" />
+                            </label>
+                            <button onClick={handleExportVocab} className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors" title="Export JSON">
+                                <Download size={16} />
+                            </button>
+                        </div>
+                    </div>
                     <div className="flex-1 overflow-y-auto p-0">{vocabulary.length === 0 ? (<div className="p-8 text-center text-gray-500 text-sm opacity-60"><p>No words saved yet.</p></div>) : (vocabulary.map((item) => (<div key={item.id} onClick={() => { setSelectedWord(item); if (player.videoRef.current && player.isPlaying) { player.videoRef.current.pause(); player.setIsPlaying(false); } }} className="p-4 border-b border-gray-800 group hover:bg-gray-900 cursor-pointer transition-colors"><div className="flex justify-between items-start mb-1"><span className="font-bold text-white text-lg">{item.word}</span><button onClick={(e) => { e.stopPropagation(); setVocabulary(v => v.filter(i => i.id !== item.id)); }} className="text-gray-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity p-1"><Trash2 size={16} /></button></div><p className="text-sm text-gray-400 line-clamp-2">{item.meaning}</p></div>)))}</div>
                 </div>
             )}
