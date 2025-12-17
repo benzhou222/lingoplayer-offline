@@ -662,29 +662,46 @@ export default function App() {
                     lastSaveTimeRef.current = now;
                 }
 
-                if (player.playbackMode === PlaybackMode.LOOP_SENTENCE && currentSegmentIndex !== -1 && subtitles[currentSegmentIndex] && time >= subtitles[currentSegmentIndex].end) {
-                    player.videoRef.current.currentTime = subtitles[currentSegmentIndex].start;
-                    player.setCurrentTime(subtitles[currentSegmentIndex].start);
-                    animationFrameId = requestAnimationFrame(updateLoop);
-                    return;
-                }
-
+                // --- PRIORITY 1: LOCK HANDLING (Anti-Race Condition) ---
+                // We check lock FIRST. If locked, we SKIP loop checks.
+                let isLocked = false;
                 if (lockStateRef.current) {
                     const { index, start } = lockStateRef.current;
-                    if (time > (start + 0.001)) lockStateRef.current.hits += 1; else lockStateRef.current.hits = 0;
-                    if (lockStateRef.current.hits >= settings.syncThreshold) lockStateRef.current = null;
-                    else {
-                        if (currentSegmentIndex !== index) setCurrentSegmentIndex(index);
-                        animationFrameId = requestAnimationFrame(updateLoop);
-                        return;
+
+                    // If state is stale, force update it now
+                    if (currentSegmentIndex !== index) {
+                        setCurrentSegmentIndex(index);
+                    }
+
+                    if (time > (start + 0.001)) lockStateRef.current.hits += 1;
+                    else lockStateRef.current.hits = 0;
+
+                    if (lockStateRef.current.hits >= settings.syncThreshold) {
+                        lockStateRef.current = null;
+                    } else {
+                        isLocked = true;
                     }
                 }
 
-                const shouldAutoUpdate = player.playbackMode !== PlaybackMode.LOOP_SENTENCE || currentSegmentIndex === -1;
-                if (shouldAutoUpdate && editingSegmentIndex === -1) {
-                    const exactIndex = subtitles.findIndex(s => time >= s.start && time < s.end);
-                    if (exactIndex !== -1 && exactIndex !== currentSegmentIndex) setCurrentSegmentIndex(exactIndex);
-                    else if (exactIndex === -1 && currentSegmentIndex !== -1) setCurrentSegmentIndex(-1);
+                // --- PRIORITY 2: LOOP LOGIC ---
+                // Only run loop logic if NOT locked.
+                if (!isLocked && player.playbackMode === PlaybackMode.LOOP_SENTENCE && currentSegmentIndex !== -1 && subtitles[currentSegmentIndex]) {
+                    const seg = subtitles[currentSegmentIndex];
+                    if (time >= seg.end) {
+                        player.videoRef.current.currentTime = seg.start;
+                        player.setCurrentTime(seg.start);
+                        // No return here, allow the loop to continue
+                    }
+                }
+
+                // --- PRIORITY 3: AUTO UPDATE INDEX ---
+                if (!isLocked && editingSegmentIndex === -1) {
+                    const shouldAutoUpdate = player.playbackMode !== PlaybackMode.LOOP_SENTENCE || currentSegmentIndex === -1;
+                    if (shouldAutoUpdate) {
+                        const exactIndex = subtitles.findIndex(s => time >= s.start && time < s.end);
+                        if (exactIndex !== -1 && exactIndex !== currentSegmentIndex) setCurrentSegmentIndex(exactIndex);
+                        else if (exactIndex === -1 && currentSegmentIndex !== -1) setCurrentSegmentIndex(-1);
+                    }
                 }
             }
             animationFrameId = requestAnimationFrame(updateLoop);
