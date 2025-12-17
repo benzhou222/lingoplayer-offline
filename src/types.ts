@@ -60,3 +60,9 @@ export interface WorkerPayload {
   audio: Float32Array;
   sampleRate: number;
 }
+
+export interface PlaylistTab {
+  id: string;
+  name: string;
+  files: File[];
+}

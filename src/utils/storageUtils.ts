@@ -1,8 +1,8 @@
 
-import { SubtitleSegment } from "../types";
+import { SubtitleSegment, PlaylistTab } from "../types";
 
 const DB_NAME = 'LingoPlayerDB';
-const DB_VERSION = 2; // Incremented for schema change
+const DB_VERSION = 3;
 const STORE_NAME = 'playlist_rich';
 
 // Schema for rich persistence
@@ -14,6 +14,8 @@ export interface PlaylistEntry {
     lastModified: number;
     progress: number;
     subtitles: SubtitleSegment[];
+    tabId?: string;
+    tabName?: string;
 }
 
 const openDB = (): Promise<IDBDatabase> => {
@@ -21,7 +23,6 @@ const openDB = (): Promise<IDBDatabase> => {
         const request = indexedDB.open(DB_NAME, DB_VERSION);
         request.onupgradeneeded = (event) => {
             const db = (event.target as IDBOpenDBRequest).result;
-            // Create new store if needed, or clear old one if version bumped
             if (!db.objectStoreNames.contains(STORE_NAME)) {
                 db.createObjectStore(STORE_NAME, { keyPath: ['name', 'size'] });
             }
@@ -31,8 +32,11 @@ const openDB = (): Promise<IDBDatabase> => {
     });
 };
 
+// We save flattened files with their Tab ID. 
+// Note: We deliberately do NOT save the File object (Blob) to IDB to keep it lightweight.
+// We only save metadata. On Web, files will be placeholders on reload. On Electron, 'path' is used.
 export const saveFullPlaylistToDB = async (
-    videoList: File[],
+    allFilesAcrossTabs: { file: File, tabId: string, tabName: string }[],
     subtitlesMap: Record<string, SubtitleSegment[]>,
     progressMap: Record<string, number>
 ) => {
@@ -41,16 +45,19 @@ export const saveFullPlaylistToDB = async (
         const transaction = db.transaction(STORE_NAME, 'readwrite');
         const store = transaction.objectStore(STORE_NAME);
 
-        // Clear existing to avoid stale entries
+        // Clear existing files to sync current state
         await new Promise((resolve, reject) => {
-             const req = store.clear();
-             req.onsuccess = resolve;
-             req.onerror = reject;
+            const req = store.clear();
+            req.onsuccess = resolve;
+            req.onerror = reject;
         });
 
-        const entries: PlaylistEntry[] = videoList.map(f => {
+        // Batch add
+        for (const item of allFilesAcrossTabs) {
+            const f = item.file;
             const key = `${f.name}-${f.size}`;
-            return {
+
+            const entry: PlaylistEntry = {
                 name: f.name,
                 size: f.size,
                 type: f.type,
@@ -58,28 +65,27 @@ export const saveFullPlaylistToDB = async (
                 // @ts-ignore
                 path: f.path || null,
                 progress: progressMap[key] || 0,
-                subtitles: subtitlesMap[key] || []
+                subtitles: subtitlesMap[key] || [],
+                tabId: item.tabId,
+                tabName: item.tabName
             };
-        });
-
-        // Batch add
-        for (const entry of entries) {
             store.put(entry);
         }
-        
+
         return new Promise<void>((resolve, reject) => {
             transaction.oncomplete = () => resolve();
             transaction.onerror = () => reject(transaction.error);
         });
     } catch (e) {
-        console.error("Error saving playlist to DB:", e);
+        console.error("Error saving playlist files to DB:", e);
     }
 };
 
-export const loadFullPlaylistFromDB = async (): Promise<{ 
-    files: File[], 
-    subtitlesMap: Record<string, SubtitleSegment[]>, 
-    progressMap: Record<string, number> 
+// Return flat entries. App.tsx will distribute them into tabs.
+export const loadFullPlaylistFromDB = async (): Promise<{
+    entries: PlaylistEntry[],
+    subtitlesMap: Record<string, SubtitleSegment[]>,
+    progressMap: Record<string, number>
 }> => {
     try {
         const db = await openDB();
@@ -90,34 +96,16 @@ export const loadFullPlaylistFromDB = async (): Promise<{
         return new Promise((resolve, reject) => {
             request.onsuccess = () => {
                 const data = request.result as PlaylistEntry[];
-                
-                const files: File[] = [];
                 const subtitlesMap: Record<string, SubtitleSegment[]> = {};
                 const progressMap: Record<string, number> = {};
 
-                if (!data) {
-                    resolve({ files: [], subtitlesMap: {}, progressMap: {} });
+                if (!data || data.length === 0) {
+                    resolve({ entries: [], subtitlesMap: {}, progressMap: {} });
                     return;
                 }
 
                 data.forEach(item => {
                     const key = `${item.name}-${item.size}`;
-                    
-                    // Reconstruct File
-                    const f = new File([""], item.name, { type: item.type, lastModified: item.lastModified });
-                    try { Object.defineProperty(f, 'size', { value: item.size, writable: false }); } catch(e) {}
-
-                    if (item.path) {
-                        try {
-                            Object.defineProperty(f, 'path', { value: item.path, writable: false, enumerable: false, configurable: true });
-                        } catch(e) {}
-                    } else {
-                         try {
-                            Object.defineProperty(f, 'isPlaceholder', { value: true, writable: false, enumerable: false, configurable: true });
-                        } catch(e) {}
-                    }
-
-                    files.push(f);
                     if (item.subtitles && item.subtitles.length > 0) {
                         subtitlesMap[key] = item.subtitles;
                     }
@@ -125,17 +113,13 @@ export const loadFullPlaylistFromDB = async (): Promise<{
                         progressMap[key] = item.progress;
                     }
                 });
-                
-                resolve({ files, subtitlesMap, progressMap });
+
+                resolve({ entries: data, subtitlesMap, progressMap });
             };
             request.onerror = () => reject(request.error);
         });
     } catch (e) {
         console.error("Error loading playlist from DB:", e);
-        return { files: [], subtitlesMap: {}, progressMap: {} };
+        return { entries: [], subtitlesMap: {}, progressMap: {} };
     }
 };
-
-// Deprecated legacy wrappers if needed, but App.tsx will switch to new ones
-export const savePlaylistToDB = async (files: File[]) => { /* No-op, use saveFullPlaylistToDB */ };
-export const loadPlaylistFromDB = async () => [];

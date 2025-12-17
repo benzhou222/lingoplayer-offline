@@ -1,6 +1,6 @@
 import React from 'react';
-import { 
-  Play, Pause, Repeat, Repeat1, 
+import {
+  Play, Pause, Repeat, Repeat1,
   SkipBack, SkipForward, FastForward,
   Volume2, VolumeX, ChevronLeft, ChevronRight
 } from 'lucide-react';
@@ -59,11 +59,11 @@ export const VideoControls: React.FC<VideoControlsProps> = ({
 
   return (
     <div className="bg-gray-900 border-t border-gray-800 p-4 flex flex-col gap-3 select-none">
-      
+
       {/* Progress Bar */}
       <div className="flex items-center gap-3 text-xs text-gray-400 font-mono">
         <span className="min-w-[80px] text-right">{formatTime(currentTime)}</span>
-        <input 
+        <input
           type="range"
           min={0}
           max={duration || 100}
@@ -77,15 +77,14 @@ export const VideoControls: React.FC<VideoControlsProps> = ({
 
       {/* Controls Container - Split into 3 sections: Left (Loop), Center (Transport), Right (Speed) */}
       <div className="flex items-center justify-between gap-4">
-        
+
         {/* 1. Far Left: Loop Mode */}
         <button
           onClick={onToggleMode}
-          className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-all ${
-            playbackMode === PlaybackMode.LOOP_SENTENCE 
-              ? 'bg-blue-900/50 border-blue-500 text-blue-200' 
-              : 'bg-transparent border-gray-700 text-gray-400 hover:text-white'
-          }`}
+          className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-all ${playbackMode === PlaybackMode.LOOP_SENTENCE
+            ? 'bg-blue-900/50 border-blue-500 text-blue-200'
+            : 'bg-transparent border-gray-700 text-gray-400 hover:text-white'
+            }`}
           title={playbackMode === PlaybackMode.LOOP_SENTENCE ? "Looping Current Sentence (Q)" : "Continuous Play (Q)"}
         >
           {playbackMode === PlaybackMode.LOOP_SENTENCE ? <Repeat1 size={16} /> : <Repeat size={16} />}
@@ -96,7 +95,7 @@ export const VideoControls: React.FC<VideoControlsProps> = ({
 
         {/* 2. Center: Play/Prev/Next + Volume */}
         <div className="flex items-center gap-2 md:gap-4">
-          
+
           {/* Frame Step Controls */}
           <div className="flex items-center gap-2 mr-2">
             <button
@@ -147,34 +146,34 @@ export const VideoControls: React.FC<VideoControlsProps> = ({
               {isMuted || volume === 0 ? <VolumeX size={20} /> : <Volume2 size={20} />}
             </button>
             <div className="w-20 flex items-center" title="Volume (- / =)">
-               <input
+              <input
                 type="range"
                 min={0}
                 max={1}
                 step={0.05}
                 value={isMuted ? 0 : volume}
                 onChange={(e) => onVolumeChange(parseFloat(e.target.value))}
-                className="w-20 h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-gray-200"
+                className="w-20 h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-gray-400"
               />
             </div>
           </div>
         </div>
 
         {/* 3. Far Right: Speed Selector */}
-        <div 
+        <div
           className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 rounded-lg px-3 py-1.5 transition-colors cursor-pointer relative group border border-gray-700 hover:border-gray-600"
           title="Playback Speed (S / W)"
         >
-            <FastForward size={14} className="text-gray-400" />
-            <select 
-              value={playbackRate} 
-              onChange={(e) => onRateChange(parseFloat(e.target.value))}
-              className="bg-gray-800 text-sm font-medium text-gray-200 focus:outline-none appearance-none cursor-pointer text-center min-w-[32px] border-none"
-            >
-              {rates.map(r => (
-                <option key={r} value={r} className="bg-gray-900 text-gray-200">{r}x</option>
-              ))}
-            </select>
+          <FastForward size={14} className="text-gray-400" />
+          <select
+            value={playbackRate}
+            onChange={(e) => onRateChange(parseFloat(e.target.value))}
+            className="bg-gray-800 text-sm font-medium text-gray-200 focus:outline-none appearance-none cursor-pointer text-center min-w-[32px] border-none"
+          >
+            {rates.map(r => (
+              <option key={r} value={r} className="bg-gray-900 text-gray-200">{r}x</option>
+            ))}
+          </select>
         </div>
       </div>
     </div>

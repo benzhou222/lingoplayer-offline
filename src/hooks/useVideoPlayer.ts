@@ -74,8 +74,8 @@ export const useVideoPlayer = () => {
             videoRef.current.pause();
             setIsPlaying(false);
             const delta = 0.042; // Approx 1 frame at 24fps
-            const newTime = direction === 'next'
-                ? Math.min(duration, videoRef.current.currentTime + delta)
+            const newTime = direction === 'next' 
+                ? Math.min(duration, videoRef.current.currentTime + delta) 
                 : Math.max(0, videoRef.current.currentTime - delta);
             handleSeek(newTime);
         }
