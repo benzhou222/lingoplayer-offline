@@ -11,6 +11,21 @@ export const useVideoPlayer = () => {
     const [volume, setVolume] = useState(1.0);
     const [isMuted, setIsMuted] = useState(false);
 
+    // Sync playbackRate to DOM whenever it changes
+    useEffect(() => {
+        if (videoRef.current) {
+            videoRef.current.playbackRate = playbackRate;
+        }
+    }, [playbackRate]);
+
+    // Apply Volume/Mute effects
+    useEffect(() => {
+        if (videoRef.current) {
+            videoRef.current.volume = volume;
+            videoRef.current.muted = isMuted;
+        }
+    }, [volume, isMuted]);
+
     // Handlers
     const togglePlayPause = useCallback(() => {
         if (videoRef.current) {
@@ -29,6 +44,7 @@ export const useVideoPlayer = () => {
 
     const handleRateChange = useCallback((rate: number) => {
         setPlaybackRate(rate);
+        // Direct update for immediate feedback
         if (videoRef.current) videoRef.current.playbackRate = rate;
     }, []);
 
@@ -48,28 +64,22 @@ export const useVideoPlayer = () => {
     const handleLoadedMetadata = useCallback(() => {
         if (videoRef.current) {
             setDuration(videoRef.current.duration);
+            // CRITICAL FIX: Restore playback rate as loading a new source resets it to 1.0
+            videoRef.current.playbackRate = playbackRate;
         }
-    }, []);
+    }, [playbackRate]);
 
     const stepFrame = useCallback((direction: 'prev' | 'next') => {
         if (videoRef.current) {
             videoRef.current.pause();
             setIsPlaying(false);
             const delta = 0.042; // Approx 1 frame at 24fps
-            const newTime = direction === 'next' 
-                ? Math.min(duration, videoRef.current.currentTime + delta) 
+            const newTime = direction === 'next'
+                ? Math.min(duration, videoRef.current.currentTime + delta)
                 : Math.max(0, videoRef.current.currentTime - delta);
             handleSeek(newTime);
         }
     }, [duration, handleSeek]);
-
-    // Apply Volume/Mute effects
-    useEffect(() => {
-        if (videoRef.current) {
-            videoRef.current.volume = volume;
-            videoRef.current.muted = isMuted;
-        }
-    }, [volume, isMuted]);
 
     return {
         videoRef,
