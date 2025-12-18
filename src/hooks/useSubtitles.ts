@@ -168,6 +168,40 @@ export const useSubtitles = (player: any, videoFile: File | null, settings: any)
         else lockStateRef.current = null;
     }, [player]);
 
+    const handlePrevSentence = () => {
+        const currentTime = player.currentTime;
+        const segments = subsRef.current;
+        const currentIndex = indexRef.current;
+
+        if (currentIndex !== -1) {
+            if (currentIndex > 0) jumpToSegment(currentIndex - 1);
+        } else {
+            // 寻找当前时间点之前的最后一条字幕
+            const prevIndex = [...segments].reverse().findIndex(s => s.end < currentTime);
+            if (prevIndex !== -1) {
+                jumpToSegment(segments.length - 1 - prevIndex);
+            } else if (segments.length > 0) {
+                jumpToSegment(0); // 如果前面没字幕了，跳到第一条
+            }
+        }
+    };
+
+    const handleNextSentence = () => {
+        const currentTime = player.currentTime;
+        const segments = subsRef.current;
+        const currentIndex = indexRef.current;
+
+        if (currentIndex !== -1) {
+            if (currentIndex < segments.length - 1) jumpToSegment(currentIndex + 1);
+        } else {
+            // 寻找当前时间点之后的第一个字幕
+            const nextIndex = segments.findIndex(s => s.start > currentTime);
+            if (nextIndex !== -1) {
+                jumpToSegment(nextIndex);
+            }
+        }
+    };
+
     useEffect(() => {
         let rafId: number;
         const update = () => {
@@ -219,8 +253,8 @@ export const useSubtitles = (player: any, videoFile: File | null, settings: any)
         processingVideoKey, errorMsg, setErrorMsg, editingSegmentIndex, editText, setEditText,
         editStart, setEditStart, editEnd, setEditEnd, audioDataCacheRef, lockStateRef,
         updateSubtitles, autoLoadSubtitles, handleGenerate, jumpToSegment, handleManualSeek,
-        handlePrevSentence: () => { if (indexRef.current > 0) jumpToSegment(indexRef.current - 1) },
-        handleNextSentence: () => { if (indexRef.current < subsRef.current.length - 1) jumpToSegment(indexRef.current + 1) },
+        handlePrevSentence,
+        handleNextSentence,
         formatTime,
         startEditing: (i: number, t: string, s: number, e: number) => {
             setEditingSegmentIndex(i); setEditText(t); setEditStart(formatTime(s)); setEditEnd(formatTime(e));
