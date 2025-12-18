@@ -1,3 +1,4 @@
+
 export interface SubtitleSegment {
   id: number;
   start: number; // seconds
@@ -34,7 +35,7 @@ export interface LocalASRConfig {
   enabled: boolean;
   endpoint: string;
   model: string;
-  timeScale?: number; // Optional: 1.0 (sec), 0.01 (cs), 0.001 (ms). If undefined, auto-detect.
+  timeScale?: number;
 }
 
 export interface GeminiConfig {
@@ -44,25 +45,28 @@ export interface GeminiConfig {
 export type SegmentationMethod = 'fixed' | 'vad';
 
 export interface VADSettings {
-  batchSize: number; // Seconds (e.g. 120)
-  minSilence: number; // Seconds (e.g. 0.2)
-  silenceThreshold: number; // Amplitude (e.g. 0.01)
-  filteringEnabled: boolean; // Enable/Disable band-pass filter
-}
-
-// Worker Types
-export interface WorkerMessage {
-  type: 'load' | 'generate' | 'ready' | 'update' | 'complete' | 'error';
-  data?: any;
-}
-
-export interface WorkerPayload {
-  audio: Float32Array;
-  sampleRate: number;
+  batchSize: number;
+  minSilence: number;
+  silenceThreshold: number;
+  filteringEnabled: boolean;
 }
 
 export interface PlaylistTab {
   id: string;
   name: string;
   files: File[];
+}
+
+// 解决 Property 'electron' does not exist on type 'Window'
+declare global {
+  interface Window {
+    electron?: {
+      isElectron: boolean;
+      extractAudio: (filePath: string) => Promise<any>;
+      convertVideo: (filePath: string, jobId: string) => Promise<string>;
+      cancelConversion: (jobId: string) => Promise<void>;
+      onConversionProgress: (callback: (data: any) => void) => (() => void);
+    };
+    require: any;
+  }
 }

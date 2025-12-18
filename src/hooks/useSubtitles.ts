@@ -32,12 +32,7 @@ const parseTime = (timeStr: string): number => {
     }
 };
 
-export const useSubtitles = (
-    player: any, 
-    videoFile: File | null, 
-    settings: any
-) => {
-    // State
+export const useSubtitles = (player: any, videoFile: File | null, settings: any) => {
     const [subtitles, setSubtitles] = useState<SubtitleSegment[]>([]);
     const [currentSegmentIndex, setCurrentSegmentIndex] = useState<number>(-1);
     const [videoSubtitlesMap, setVideoSubtitlesMap] = useState<Record<string, SubtitleSegment[]>>({});
@@ -45,106 +40,71 @@ export const useSubtitles = (
     const [processingVideoKey, setProcessingVideoKey] = useState<string | null>(null);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-    // Editing State
     const [editingSegmentIndex, setEditingSegmentIndex] = useState<number>(-1);
-    const [editText, setEditText] = useState<string>('');
-    const [editStart, setEditStart] = useState<string>('');
-    const [editEnd, setEditEnd] = useState<string>('');
+    const [editText, setEditText] = useState('');
+    const [editStart, setEditStart] = useState('');
+    const [editEnd, setEditEnd] = useState('');
 
-    // Refs
     const processingIdRef = useRef(0);
     const audioDataCacheRef = useRef<Float32Array | null>(null);
     const lockStateRef = useRef<{ index: number; start: number; hits: number } | null>(null);
     const lastSaveTimeRef = useRef<number>(0);
-    const currentVideoFileRef = useRef<File | null>(null);
 
-    useEffect(() => {
-        currentVideoFileRef.current = videoFile;
-    }, [videoFile]);
+    const subsRef = useRef<SubtitleSegment[]>([]);
+    const modeRef = useRef<PlaybackMode>(PlaybackMode.CONTINUOUS);
+    const indexRef = useRef<number>(-1);
 
-    // Helpers
+    useEffect(() => { subsRef.current = subtitles; }, [subtitles]);
+    useEffect(() => { modeRef.current = player.playbackMode; }, [player.playbackMode]);
+    useEffect(() => { indexRef.current = currentSegmentIndex; }, [currentSegmentIndex]);
+
     const updateSubtitles = useCallback((newSegments: SubtitleSegment[], file: File | null = videoFile) => {
-        if (file) {
-            const key = `${file.name}-${file.size}`;
-            setVideoSubtitlesMap(prev => ({ ...prev, [key]: newSegments }));
-            if (videoFile && `${videoFile.name}-${videoFile.size}` === key) {
-                setSubtitles(newSegments);
-            }
-        } else {
-            setSubtitles(newSegments);
-        }
+        if (!file) return;
+        const key = `${file.name}-${file.size}`;
+        setVideoSubtitlesMap(prev => ({ ...prev, [key]: newSegments }));
+        if (videoFile && `${videoFile.name}-${videoFile.size}` === key) setSubtitles(newSegments);
     }, [videoFile]);
 
     const autoLoadSubtitles = useCallback(async (files: File[], newFile: File) => {
         const key = `${newFile.name}-${newFile.size}`;
-        // Note: We access the state directly here, but in `usePlaylist` this might be stale if not careful.
-        // However, this function is passed down and called. We need to check if the map has it.
-        // Since `videoSubtitlesMap` is in closure, we use functional update pattern or just rely on the fact that
-        // this component re-renders when map updates.
-        // Optimization: Check existing map in a functional update? No, that's for setting.
-        // Here we can't easily see the *latest* map if we are inside a callback that hasn't refreshed.
-        // But `autoLoadSubtitles` is usually triggered by user action, so state should be fresh.
-        // To be safe, we'll check it before parsing.
-        
-        // Actually, for this specific refactor, we can skip the map check here or pass the map in.
-        // Simpler: Just do the logic. If it overwrites, it's fine (same content).
-        
         const baseName = newFile.name.replace(/\.[^/.]+$/, "");
-        const sibling = files.find(f => {
-            const fName = f.name.replace(/\.[^/.]+$/, "");
-            const ext = f.name.split('.').pop()?.toLowerCase();
-            return fName === baseName && (ext === 'srt' || ext === 'vtt');
-        });
+        const sibling = files.find(f => f.name.replace(/\.[^/.]+$/, "") === baseName && (f.name.endsWith('.srt') || f.name.endsWith('.vtt')));
 
         if (sibling) {
             try {
                 const segs = await parseSubtitleFile(sibling);
                 const mapped = segs.map((s, i) => ({ ...s, id: i }));
-                setVideoSubtitlesMap(prev => {
-                    if (prev[key]) return prev; // Don't overwrite if exists
-                    return { ...prev, [key]: mapped };
-                });
+                setVideoSubtitlesMap(prev => prev[key] ? prev : { ...prev, [key]: mapped });
                 if (videoFile && videoFile.name === newFile.name) setSubtitles(mapped);
                 return;
-            } catch (e) { console.warn("Failed to parse sibling", e); }
+            } catch (e) { }
         }
 
-        // Electron sidecar check
-        // @ts-ignore
-        if (window.electron && window.electron.isElectron && newFile.path) {
+        if (window.electron?.isElectron && (newFile as any).path) {
             try {
-                // @ts-ignore
-                const fs = window.require('fs');
-                // @ts-ignore
-                const path = window.require('path');
-                // @ts-ignore
-                const videoPath = newFile.path;
+                const win = window as any;
+                const fs = win.require('fs');
+                const path = win.require('path');
+                const videoPath = (newFile as any).path;
                 const dir = path.dirname(videoPath);
                 const nameNoExt = path.basename(videoPath, path.extname(videoPath));
                 const exts = ['.srt', '.vtt'];
-                
                 for (const ext of exts) {
                     const subPath = path.join(dir, nameNoExt + ext);
                     if (fs.existsSync(subPath)) {
                         const text = fs.readFileSync(subPath, 'utf8');
-                        const segs = parseSubtitleContent(text);
-                        const mapped = segs.map((s: any, i: number) => ({ ...s, id: i }));
-                        setVideoSubtitlesMap(prev => {
-                            if (prev[key]) return prev;
-                            return { ...prev, [key]: mapped };
-                        });
-                        if (videoFile && videoFile.name === newFile.name) setSubtitles(mapped);
-                        return; 
+                        const segs = parseSubtitleContent(text).map((s, i) => ({ ...s, id: i }));
+                        setVideoSubtitlesMap(prev => prev[key] ? prev : { ...prev, [key]: segs });
+                        if (videoFile && videoFile.name === newFile.name) setSubtitles(segs);
+                        return;
                     }
                 }
-            } catch (e) { console.warn("Electron FS sidecar search failed", e); }
+            } catch (e) { }
         }
     }, [videoFile]);
 
-    // Generation
-    const handleGenerate = async (testMode: boolean = false) => {
+    const handleGenerate = async (testMode = false) => {
         if (!videoFile) return;
-        if ((videoFile as any).isPlaceholder) { alert("Cannot generate subtitles for a placeholder file."); return; }
         const fileKey = `${videoFile.name}-${videoFile.size}`;
         if (processingVideoKey === fileKey) {
             cancelSubtitleGeneration();
@@ -153,210 +113,134 @@ export const useSubtitles = (
             return;
         }
         if (processingVideoKey) return;
-        const currentId = processingIdRef.current + 1;
-        processingIdRef.current = currentId;
+        const currentId = ++processingIdRef.current;
         setProcessingVideoKey(fileKey);
-        
-        if (videoFile && `${videoFile.name}-${videoFile.size}` === fileKey) { 
-            setSubtitles([]); 
-            setCurrentSegmentIndex(-1); 
-            setErrorMsg(null); 
-        }
-        
+        setSubtitles([]);
+        setCurrentSegmentIndex(-1);
+        setErrorMsg(null);
         lockStateRef.current = null;
-        if (settings.isOffline && !settings.localASRConfig.enabled && settings.modelStatus === 'idle') settings.setModelStatus('loading');
-        
+
         try {
-            let audioDataForProcess = audioDataCacheRef.current;
-            if (videoFile && `${videoFile.name}-${videoFile.size}` !== fileKey) audioDataForProcess = null;
-            if (!audioDataForProcess) {
+            let audioData = audioDataCacheRef.current;
+            if (!audioData) {
                 const decoded = await getAudioData(videoFile, true);
                 if (typeof decoded !== 'string') {
-                    audioDataForProcess = decoded;
-                    if (videoFile && `${videoFile.name}-${videoFile.size}` === fileKey) audioDataCacheRef.current = decoded;
+                    audioData = decoded;
+                    audioDataCacheRef.current = decoded;
                 }
             }
+            if (!audioData) throw new Error("Audio decode failed");
             await generateSubtitles(
                 videoFile,
-                (newSegments) => { 
+                (newSegments) => {
                     if (processingIdRef.current === currentId) {
                         setVideoSubtitlesMap(prev => ({ ...prev, [fileKey]: newSegments }));
-                        const current = currentVideoFileRef.current;
-                        if (current && `${current.name}-${current.size}` === fileKey) setSubtitles(newSegments);
-                    } 
+                        if (videoFile && `${videoFile.name}-${videoFile.size}` === fileKey) setSubtitles(newSegments);
+                    }
                 },
-                settings.isOffline, settings.selectedModelId, settings.geminiConfig.apiKey, settings.localASRConfig, settings.segmentationMethod, settings.vadSettings, testMode, audioDataForProcess
+                settings.isOffline, settings.selectedModelId, settings.geminiConfig.apiKey, settings.localASRConfig, settings.segmentationMethod, settings.vadSettings, testMode, audioData
             );
             if (processingIdRef.current === currentId) setProcessingVideoKey(null);
         } catch (error: any) {
-            console.error("Subtitle generation failed", error);
             if (processingIdRef.current === currentId) {
-                if (videoFile && `${videoFile.name}-${videoFile.size}` === fileKey) setErrorMsg(error.message || "Generation Failed");
+                setErrorMsg(error.message || "Failed");
                 setProcessingVideoKey(null);
             }
         }
     };
 
-    // Editing
-    const startEditing = (index: number, text: string, start: number, end: number) => {
-        setEditingSegmentIndex(index);
-        setEditText(text);
-        setEditStart(formatTime(start));
-        setEditEnd(formatTime(end));
-        if (player.isPlaying && player.videoRef.current) {
-            player.videoRef.current.pause();
-            player.setIsPlaying(false);
-        }
-    };
-
-    const saveEdit = () => {
-        if (editingSegmentIndex === -1) return;
-        const startVal = parseTime(editStart);
-        const endVal = parseTime(editEnd);
-        if (isNaN(startVal) || isNaN(endVal) || startVal >= endVal) { alert("Invalid time range."); return; }
-        const newSubs = [...subtitles];
-        newSubs[editingSegmentIndex] = { ...newSubs[editingSegmentIndex], text: editText, start: startVal, end: endVal };
-        updateSubtitles(newSubs);
-        cancelEdit();
-    };
-
-    const cancelEdit = useCallback(() => {
-        setEditingSegmentIndex(-1);
-        setEditText('');
-        setEditStart('');
-        setEditEnd('');
-    }, []);
-
-    const deleteSubtitle = (e: React.MouseEvent, index: number) => {
-        e.stopPropagation();
-        if (window.confirm("Delete this subtitle line?")) {
-            const newSubs = subtitles.filter((_, i) => i !== index);
-            updateSubtitles(newSubs.map((s, i) => ({ ...s, id: i })));
-            if (currentSegmentIndex === index) setCurrentSegmentIndex(-1);
-        }
-    };
-
-    const handleSubtitleImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
-        const file = event.target.files?.[0];
-        if (!file || !videoFile) return;
-        try {
-            const segs = await parseSubtitleFile(file);
-            updateSubtitles(segs.map((s, i) => ({ ...s, id: i })));
-        } catch (e) { alert("Failed to parse subtitle file."); }
-        event.target.value = '';
-    };
-
-    // Global click listener to cancel edit
-    useEffect(() => {
-        const handleGlobalClick = (e: MouseEvent) => {
-            if (editingSegmentIndex === -1) return;
-            const editContainer = document.getElementById(`subtitle-edit-container-${editingSegmentIndex}`);
-            if (editContainer && !editContainer.contains(e.target as Node)) cancelEdit();
-        };
-        window.addEventListener('mousedown', handleGlobalClick);
-        return () => window.removeEventListener('mousedown', handleGlobalClick);
-    }, [editingSegmentIndex, cancelEdit]);
-
-    // Jump to segment
     const jumpToSegment = (index: number) => {
-        if (editingSegmentIndex !== -1 || !player.videoRef.current || !subtitles[index]) return;
-        const segment = subtitles[index];
-        lockStateRef.current = { index: index, start: segment.start, hits: 0 };
+        if (!player.videoRef.current || !subsRef.current[index]) return;
+        const seg = subsRef.current[index];
+        lockStateRef.current = { index, start: seg.start, hits: 0 };
         setCurrentSegmentIndex(index);
-        player.videoRef.current.currentTime = segment.start + 0.001; 
-        player.setCurrentTime(segment.start);
-        if (!player.isPlaying) { 
-            player.videoRef.current.play(); 
-            player.setIsPlaying(true); 
-        }
+        player.videoRef.current.currentTime = seg.start + 0.005;
+        player.setCurrentTime(seg.start);
+        if (!player.isPlaying) player.togglePlayPause();
     };
 
-    const handlePrevSentence = () => {
-        if (subtitles.length === 0) return;
-        if (currentSegmentIndex > 0) jumpToSegment(currentSegmentIndex - 1);
-        else {
-            const time = player.videoRef.current?.currentTime || player.currentTime;
-            const next = subtitles.findIndex(s => s.start > time);
-            if (next === -1 && subtitles.length > 0) jumpToSegment(subtitles.length - 1); else if (next > 0) jumpToSegment(next - 1);
-        }
-    };
+    const handleManualSeek = useCallback((time: number) => {
+        if (!player.videoRef.current) return;
+        player.handleSeek(time);
+        const idx = subsRef.current.findIndex(s => time >= s.start && time < s.end);
+        setCurrentSegmentIndex(idx);
+        if (idx !== -1) lockStateRef.current = { index: idx, start: time, hits: 0 };
+        else lockStateRef.current = null;
+    }, [player]);
 
-    const handleNextSentence = () => {
-        if (subtitles.length === 0) return;
-        if (currentSegmentIndex !== -1 && currentSegmentIndex < subtitles.length - 1) jumpToSegment(currentSegmentIndex + 1);
-        else {
-            const time = player.videoRef.current?.currentTime || player.currentTime;
-            const next = subtitles.findIndex(s => s.start > time);
-            if (next !== -1) jumpToSegment(next);
-        }
-    };
-
-    // SYNC LOOP
     useEffect(() => {
-        let animationFrameId: number;
-        const updateLoop = () => {
-            if (player.videoRef.current && !player.videoRef.current.paused) {
-                const time = player.videoRef.current.currentTime;
+        let rafId: number;
+        const update = () => {
+            const video = player.videoRef.current;
+            if (video && !video.paused) {
+                const time = video.currentTime;
                 player.setCurrentTime(time);
+
                 const now = Date.now();
-                if (now - lastSaveTimeRef.current > 1000 && videoFile) {
+                if (now - lastSaveTimeRef.current > 2000 && videoFile) {
                     const key = `${videoFile.name}-${videoFile.size}`;
                     setPlaybackProgressMap(prev => ({ ...prev, [key]: time }));
                     lastSaveTimeRef.current = now;
                 }
+
                 let isLocked = false;
                 if (lockStateRef.current) {
-                    const { index, start } = lockStateRef.current;
-                    if (currentSegmentIndex !== index) setCurrentSegmentIndex(index);
-                    if (time > (start + 0.001)) lockStateRef.current.hits += 1; else lockStateRef.current.hits = 0;
-                    if (lockStateRef.current.hits >= settings.syncThreshold) lockStateRef.current = null; else isLocked = true;
+                    if (indexRef.current !== lockStateRef.current.index) setCurrentSegmentIndex(lockStateRef.current.index);
+                    if (time > (lockStateRef.current.start + 0.005)) lockStateRef.current.hits++;
+                    if (lockStateRef.current.hits >= settings.syncThreshold) lockStateRef.current = null;
+                    else isLocked = true;
                 }
-                if (!isLocked && player.playbackMode === PlaybackMode.LOOP_SENTENCE && currentSegmentIndex !== -1 && subtitles[currentSegmentIndex]) {
-                    const seg = subtitles[currentSegmentIndex];
-                    if (time >= seg.end) { player.videoRef.current.currentTime = seg.start; player.setCurrentTime(seg.start); }
+
+                if (!isLocked && modeRef.current === PlaybackMode.LOOP_SENTENCE && indexRef.current !== -1) {
+                    const seg = subsRef.current[indexRef.current];
+                    if (seg && time >= seg.end) {
+                        video.currentTime = seg.start;
+                        player.setCurrentTime(seg.start);
+                    }
                 }
+
                 if (!isLocked && editingSegmentIndex === -1) {
-                    const shouldAutoUpdate = player.playbackMode !== PlaybackMode.LOOP_SENTENCE || currentSegmentIndex === -1;
-                    if (shouldAutoUpdate) {
-                        const exactIndex = subtitles.findIndex(s => time >= s.start && time < s.end);
-                        if (exactIndex !== -1 && exactIndex !== currentSegmentIndex) setCurrentSegmentIndex(exactIndex);
-                        else if (exactIndex === -1 && currentSegmentIndex !== -1) setCurrentSegmentIndex(-1);
+                    const shouldAuto = modeRef.current !== PlaybackMode.LOOP_SENTENCE || indexRef.current === -1;
+                    if (shouldAuto) {
+                        const idx = subsRef.current.findIndex(s => time >= s.start && time < s.end);
+                        if (idx !== indexRef.current) setCurrentSegmentIndex(idx);
                     }
                 }
             }
-            animationFrameId = requestAnimationFrame(updateLoop);
+            rafId = requestAnimationFrame(update);
         };
-        if (player.isPlaying) updateLoop(); else cancelAnimationFrame(animationFrameId);
-        return () => cancelAnimationFrame(animationFrameId);
-    }, [player.isPlaying, subtitles, currentSegmentIndex, player.playbackMode, settings.syncThreshold, editingSegmentIndex, videoFile, player]);
+        if (player.isPlaying) rafId = requestAnimationFrame(update);
+        return () => cancelAnimationFrame(rafId);
+    }, [player.isPlaying, videoFile, settings.syncThreshold, editingSegmentIndex, player.setCurrentTime]);
 
     return {
-        subtitles, setSubtitles,
-        currentSegmentIndex, setCurrentSegmentIndex,
-        videoSubtitlesMap, setVideoSubtitlesMap,
-        playbackProgressMap, setPlaybackProgressMap,
-        processingVideoKey, setProcessingVideoKey,
-        errorMsg, setErrorMsg,
-        
-        editingSegmentIndex,
-        editText, setEditText,
-        editStart, setEditStart,
-        editEnd, setEditEnd,
-
-        audioDataCacheRef,
-        lockStateRef,
-
-        updateSubtitles,
-        autoLoadSubtitles,
-        handleGenerate,
-        startEditing,
-        saveEdit,
-        cancelEdit,
-        deleteSubtitle,
-        handleSubtitleImport,
-        jumpToSegment,
-        handlePrevSentence,
-        handleNextSentence,
-        formatTime
+        subtitles, setSubtitles, currentSegmentIndex, setCurrentSegmentIndex,
+        videoSubtitlesMap, setVideoSubtitlesMap, playbackProgressMap, setPlaybackProgressMap,
+        processingVideoKey, errorMsg, setErrorMsg, editingSegmentIndex, editText, setEditText,
+        editStart, setEditStart, editEnd, setEditEnd, audioDataCacheRef, lockStateRef,
+        updateSubtitles, autoLoadSubtitles, handleGenerate, jumpToSegment, handleManualSeek,
+        handlePrevSentence: () => { if (indexRef.current > 0) jumpToSegment(indexRef.current - 1) },
+        handleNextSentence: () => { if (indexRef.current < subsRef.current.length - 1) jumpToSegment(indexRef.current + 1) },
+        formatTime,
+        startEditing: (i: number, t: string, s: number, e: number) => {
+            setEditingSegmentIndex(i); setEditText(t); setEditStart(formatTime(s)); setEditEnd(formatTime(e));
+            if (player.videoRef.current) player.videoRef.current.pause();
+        },
+        saveEdit: () => {
+            const s = parseTime(editStart);
+            const e = parseTime(editEnd);
+            if (isNaN(s) || isNaN(e)) { alert("Invalid time format"); return; }
+            const next = [...subtitles];
+            next[editingSegmentIndex] = { ...next[editingSegmentIndex], text: editText, start: s, end: e };
+            updateSubtitles(next); setEditingSegmentIndex(-1);
+        },
+        cancelEdit: () => setEditingSegmentIndex(-1),
+        deleteSubtitle: (e: any, i: number) => {
+            e.stopPropagation(); setSubtitles(prev => prev.filter((_, idx) => idx !== i));
+        },
+        handleSubtitleImport: async (e: any) => {
+            const f = e.target.files?.[0]; if (!f) return;
+            const s = await parseSubtitleFile(f); updateSubtitles(s.map((x, i) => ({ ...x, id: i })));
+        }
     };
 };

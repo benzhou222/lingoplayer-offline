@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { PlaybackMode } from '../types';
 
 export const useVideoPlayer = () => {
@@ -11,14 +12,10 @@ export const useVideoPlayer = () => {
     const [volume, setVolume] = useState(1.0);
     const [isMuted, setIsMuted] = useState(false);
 
-    // Sync playbackRate to DOM whenever it changes
     useEffect(() => {
-        if (videoRef.current) {
-            videoRef.current.playbackRate = playbackRate;
-        }
+        if (videoRef.current) videoRef.current.playbackRate = playbackRate;
     }, [playbackRate]);
 
-    // Apply Volume/Mute effects
     useEffect(() => {
         if (videoRef.current) {
             videoRef.current.volume = volume;
@@ -26,7 +23,6 @@ export const useVideoPlayer = () => {
         }
     }, [volume, isMuted]);
 
-    // Handlers
     const togglePlayPause = useCallback(() => {
         if (videoRef.current) {
             if (isPlaying) videoRef.current.pause();
@@ -44,7 +40,6 @@ export const useVideoPlayer = () => {
 
     const handleRateChange = useCallback((rate: number) => {
         setPlaybackRate(rate);
-        // Direct update for immediate feedback
         if (videoRef.current) videoRef.current.playbackRate = rate;
     }, []);
 
@@ -61,10 +56,20 @@ export const useVideoPlayer = () => {
         setPlaybackMode(m => m === PlaybackMode.CONTINUOUS ? PlaybackMode.LOOP_SENTENCE : PlaybackMode.CONTINUOUS);
     }, []);
 
+    const toggleFullScreen = useCallback(() => {
+        if (!videoRef.current) return;
+        if (!document.fullscreenElement) {
+            videoRef.current.requestFullscreen?.().catch(err => {
+                console.warn(`Error attempting to enable full-screen mode: ${err.message}`);
+            });
+        } else {
+            document.exitFullscreen?.();
+        }
+    }, []);
+
     const handleLoadedMetadata = useCallback(() => {
         if (videoRef.current) {
             setDuration(videoRef.current.duration);
-            // CRITICAL FIX: Restore playback rate as loading a new source resets it to 1.0
             videoRef.current.playbackRate = playbackRate;
         }
     }, [playbackRate]);
@@ -73,30 +78,24 @@ export const useVideoPlayer = () => {
         if (videoRef.current) {
             videoRef.current.pause();
             setIsPlaying(false);
-            const delta = 0.042; // Approx 1 frame at 24fps
-            const newTime = direction === 'next' 
-                ? Math.min(duration, videoRef.current.currentTime + delta) 
+            const delta = 0.042;
+            const newTime = direction === 'next'
+                ? Math.min(duration, videoRef.current.currentTime + delta)
                 : Math.max(0, videoRef.current.currentTime - delta);
             handleSeek(newTime);
         }
     }, [duration, handleSeek]);
 
-    return {
-        videoRef,
-        isPlaying, setIsPlaying,
+    return useMemo(() => ({
+        videoRef, isPlaying, setIsPlaying,
         currentTime, setCurrentTime,
         duration, setDuration,
         playbackRate, setPlaybackRate,
         playbackMode, setPlaybackMode,
         volume, setVolume,
         isMuted, setIsMuted,
-        togglePlayPause,
-        handleSeek,
-        handleRateChange,
-        handleVolumeChange,
-        toggleMute,
-        togglePlaybackMode,
-        handleLoadedMetadata,
-        stepFrame
-    };
+        togglePlayPause, handleSeek, handleRateChange,
+        handleVolumeChange, toggleMute, togglePlaybackMode,
+        toggleFullScreen, handleLoadedMetadata, stepFrame
+    }), [isPlaying, duration, playbackRate, playbackMode, volume, isMuted, togglePlayPause, handleSeek, handleRateChange, handleVolumeChange, toggleMute, togglePlaybackMode, toggleFullScreen, handleLoadedMetadata, stepFrame, currentTime]);
 };

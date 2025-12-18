@@ -4,31 +4,34 @@ import { useRef, useEffect } from 'react';
 export const useKeyboardShortcuts = (
     player: any,
     handlePrevSentence: () => void,
-    handleNextSentence: () => void
+    handleNextSentence: () => void,
+    handleManualSeek: (time: number) => void
 ) => {
-    const shortcutsRef = useRef({ 
-        player, 
-        handlePrevSentence, 
-        handleNextSentence 
+    const shortcutsRef = useRef({
+        player,
+        handlePrevSentence,
+        handleNextSentence,
+        handleManualSeek
     });
 
     useEffect(() => {
-        shortcutsRef.current = { 
-            player, 
-            handlePrevSentence, 
-            handleNextSentence
+        shortcutsRef.current = {
+            player,
+            handlePrevSentence,
+            handleNextSentence,
+            handleManualSeek
         };
     });
 
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
             const target = e.target as HTMLElement;
-            // Disable shortcuts if typing in input/textarea/contenteditable
+            // Prevent shortcuts when typing in inputs or textareas
             if (['INPUT', 'TEXTAREA'].includes(target.tagName) || target.isContentEditable) {
                 return;
             }
 
-            const { player, handlePrevSentence, handleNextSentence } = shortcutsRef.current;
+            const { player, handlePrevSentence, handleNextSentence, handleManualSeek } = shortcutsRef.current;
             const rates = [0.3, 0.4, 0.5, 0.6, 0.75, 1.0, 1.25, 1.5, 2.0];
 
             switch (e.key.toLowerCase()) {
@@ -36,6 +39,10 @@ export const useKeyboardShortcuts = (
                 case 'k':
                     e.preventDefault();
                     player.togglePlayPause();
+                    break;
+                case 'enter':
+                    e.preventDefault();
+                    player.toggleFullScreen();
                     break;
                 case 'a':
                     handlePrevSentence();
@@ -48,10 +55,10 @@ export const useKeyboardShortcuts = (
                     const indexW = rates.indexOf(currW);
                     let nextRate = rates[rates.length - 1];
                     if (indexW !== -1) {
-                         nextRate = rates[Math.min(rates.length - 1, indexW + 1)];
+                        nextRate = rates[Math.min(rates.length - 1, indexW + 1)];
                     } else {
-                         const found = rates.find(r => r > currW);
-                         if (found) nextRate = found;
+                        const found = rates.find(r => r > currW);
+                        if (found) nextRate = found;
                     }
                     player.handleRateChange(nextRate);
                     break;
@@ -83,20 +90,22 @@ export const useKeyboardShortcuts = (
                     break;
                 case '-':
                 case '_':
+                case 'arrowdown':
                     player.handleVolumeChange(Math.max(0, parseFloat((player.volume - 0.05).toFixed(2))));
                     break;
                 case '=':
                 case '+':
+                case 'arrowup':
                     player.handleVolumeChange(Math.min(1, parseFloat((player.volume + 0.05).toFixed(2))));
                     break;
                 case 'arrowleft':
                     if (player.videoRef.current) {
-                        player.handleSeek(Math.max(0, player.videoRef.current.currentTime - 5));
+                        handleManualSeek(Math.max(0, player.videoRef.current.currentTime - 5));
                     }
                     break;
                 case 'arrowright':
                     if (player.videoRef.current) {
-                        player.handleSeek(Math.min(player.duration, player.videoRef.current.currentTime + 5));
+                        handleManualSeek(Math.min(player.duration, player.videoRef.current.currentTime + 5));
                     }
                     break;
             }
