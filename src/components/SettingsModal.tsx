@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
-import { X, Settings, Server, Cloud, ListVideo, Scissors, Mic, ChevronDown, Terminal, CheckCircle2, Loader2, Download, RefreshCw } from 'lucide-react';
+import { X, Settings, Server, Cloud, ListVideo, Scissors, Mic, ChevronDown, Terminal, CheckCircle2, Loader2, Download, RefreshCw, ChevronRight, ChevronDown as ChevronDownIcon } from 'lucide-react';
 import { GeminiConfig, LocalASRConfig, LocalLLMConfig, SegmentationMethod, VADSettings } from '../types';
 import { preloadOfflineModel, fetchLocalModels } from '../services/geminiService';
 
 interface SettingsModalProps {
     isOpen: boolean;
     onClose: () => void;
-    
+
     // Config State
     settingsTab: 'online' | 'local';
     setSettingsTab: (tab: 'online' | 'local') => void;
@@ -22,14 +22,14 @@ interface SettingsModalProps {
     setLocalASRConfig: React.Dispatch<React.SetStateAction<LocalASRConfig>>;
     geminiConfig: GeminiConfig;
     setGeminiConfig: React.Dispatch<React.SetStateAction<GeminiConfig>>;
-    
+
     // Model State
     modelStatus: 'idle' | 'loading' | 'ready';
     selectedModelId: string;
     setSelectedModelId: (id: string) => void;
     downloadProgress: { file: string; progress: number } | null;
     OFFLINE_MODELS: { id: string; name: string }[];
-    
+
     // Local Utils
     localModels: string[];
     setLocalModels: (models: string[]) => void;
@@ -48,6 +48,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     localModels, setLocalModels
 }) => {
     const [checkingModel, setCheckingModel] = useState(false);
+    const [isGlobalSettingsCollapsed, setIsGlobalSettingsCollapsed] = useState(true);
 
     if (!isOpen) return null;
 
@@ -117,6 +118,158 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     Settings
                 </h3>
 
+                {/* GLOBAL SETTINGS - COLLAPSIBLE */}
+                <div className="mb-6 border border-gray-700 rounded-lg overflow-hidden">
+                    <button
+                        onClick={() => setIsGlobalSettingsCollapsed(!isGlobalSettingsCollapsed)}
+                        className="w-full flex items-center justify-between p-4 bg-gray-800/50 hover:bg-gray-800/70 transition-colors border-b border-gray-700"
+                    >
+                        <div className="flex items-center gap-3">
+                            {isGlobalSettingsCollapsed ? (
+                                <ChevronRight size={18} className="text-blue-400" />
+                            ) : (
+                                <ChevronDownIcon size={18} className="text-blue-400" />
+                            )}
+                            <div className="text-left">
+                                <h4 className="text-sm font-bold text-white">Global Settings</h4>
+                                <p className="text-xs text-gray-400">Subtitle sync and audio segmentation configuration</p>
+                            </div>
+                        </div>
+                        <div className="text-xs text-gray-500">
+                            {isGlobalSettingsCollapsed ? 'Expand' : 'Collapse'}
+                        </div>
+                    </button>
+
+                    {!isGlobalSettingsCollapsed && (
+                        <div className="p-4 space-y-6 bg-gray-900/30">
+                            {/* GLOBAL: SUBTITLE SYNC SETTINGS */}
+                            <div>
+                                <h5 className="text-sm font-bold text-gray-300 uppercase tracking-wider flex items-center gap-2 pb-2 mb-3">
+                                    <ListVideo size={14} /> Subtitle Synchronization
+                                </h5>
+                                <div className="px-1">
+                                    <div className="flex justify-between items-center mb-1">
+                                        <label className="text-xs font-bold text-gray-500 uppercase">Lock Stability Threshold</label>
+                                        <span className="text-xs text-blue-400 font-mono">{syncThreshold} Frames</span>
+                                    </div>
+                                    <input
+                                        type="range"
+                                        min="1"
+                                        max="30"
+                                        step="1"
+                                        value={syncThreshold}
+                                        onChange={(e) => setSyncThreshold(parseInt(e.target.value))}
+                                        className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                                    />
+                                    <p className="text-[10px] text-gray-500 mt-1">
+                                        Number of consecutive frames the timestamp must exceed the target start time before unlocking cursor control. Increase if you see the cursor jumping back.
+                                    </p>
+                                </div>
+                            </div>
+
+                            {/* GLOBAL: AUDIO SEGMENTATION SETTINGS */}
+                            <div>
+                                <h5 className="text-sm font-bold text-gray-300 uppercase tracking-wider flex items-center gap-2 pb-2 mb-3">
+                                    <Scissors size={14} /> Audio Segmentation
+                                </h5>
+                                <div className="grid grid-cols-2 gap-3 mb-4">
+                                    <button
+                                        onClick={() => setSegmentationMethod('fixed')}
+                                        className={`flex flex-col items-center justify-center p-3 rounded-lg border text-center transition-all ${segmentationMethod === 'fixed'
+                                            ? 'bg-blue-900/30 border-blue-500 text-blue-300'
+                                            : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-750'
+                                            }`}
+                                    >
+                                        <span className="font-semibold text-xs mb-1">Progressive (Fixed)</span>
+                                        <span className="text-[10px] opacity-70">Manual splits (20s, 60s...) for faster initial load.</span>
+                                    </button>
+
+                                    <button
+                                        onClick={() => setSegmentationMethod('vad')}
+                                        className={`flex flex-col items-center justify-center p-3 rounded-lg border text-center transition-all ${segmentationMethod === 'vad'
+                                            ? 'bg-blue-900/30 border-blue-500 text-blue-300'
+                                            : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'
+                                            }`}
+                                    >
+                                        <span className="font-semibold text-xs mb-1">VAD (Auto)</span>
+                                        <span className="text-[10px] opacity-70">Detects silence to split audio at sentence breaks.</span>
+                                    </button>
+                                </div>
+
+                                {/* VAD SETTINGS */}
+                                {segmentationMethod === 'vad' && (
+                                    <div className="space-y-4 px-1">
+                                        <div>
+                                            <div className="flex justify-between items-center mb-1">
+                                                <label className="text-xs font-bold text-gray-500 uppercase">Pre-split Batch Duration</label>
+                                                <span className="text-xs text-blue-400 font-mono">{vadSettings.batchSize}s</span>
+                                            </div>
+                                            <input
+                                                type="range"
+                                                min="10"
+                                                max="600"
+                                                step="10"
+                                                value={vadSettings.batchSize}
+                                                onChange={(e) => setVadSettings(p => ({ ...p, batchSize: parseInt(e.target.value) }))}
+                                                className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                                            />
+                                            <p className="text-[10px] text-gray-500 mt-1">Processing window size. Larger = better context but slower updates.</p>
+                                        </div>
+
+                                        <div>
+                                            <div className="flex justify-between items-center mb-1">
+                                                <label className="text-xs font-bold text-gray-500 uppercase">Min Silence Duration</label>
+                                                <span className="text-xs text-blue-400 font-mono">{vadSettings.minSilence}s</span>
+                                            </div>
+                                            <input
+                                                type="range"
+                                                min="0.1"
+                                                max="1.0"
+                                                step="0.05"
+                                                value={vadSettings.minSilence}
+                                                onChange={(e) => setVadSettings(p => ({ ...p, minSilence: parseFloat(e.target.value) }))}
+                                                className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                                            />
+                                            <p className="text-[10px] text-gray-500 mt-1">Minimum silence required to trigger a split.</p>
+                                        </div>
+
+                                        <div>
+                                            <div className="flex justify-between items-center mb-1">
+                                                <label className="text-xs font-bold text-gray-500 uppercase">Silence Threshold</label>
+                                                <span className="text-xs text-blue-400 font-mono">{vadSettings.silenceThreshold}</span>
+                                            </div>
+                                            <input
+                                                type="range"
+                                                min="0.001"
+                                                max="0.05"
+                                                step="0.001"
+                                                value={vadSettings.silenceThreshold}
+                                                onChange={(e) => setVadSettings(p => ({ ...p, silenceThreshold: parseFloat(e.target.value) }))}
+                                                className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                                            />
+                                            <p className="text-[10px] text-gray-500 mt-1">Sensitivity. Lower = cleaner audio needed. Higher = tolerates noise.</p>
+                                        </div>
+
+                                        {/* Filtering Toggle */}
+                                        <div className="flex items-center justify-between pt-2 border-t border-gray-800 mt-2">
+                                            <div>
+                                                <div className="text-xs font-bold text-gray-500 uppercase">Vocal Filtering</div>
+                                                <p className="text-[10px] text-gray-500">Band-pass filter (150-3000Hz) to isolate voice.</p>
+                                            </div>
+                                            <button
+                                                onClick={() => setVadSettings(p => ({ ...p, filteringEnabled: !p.filteringEnabled }))}
+                                                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${vadSettings.filteringEnabled ? 'bg-blue-600' : 'bg-gray-700'}`}
+                                            >
+                                                <span className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${vadSettings.filteringEnabled ? 'translate-x-5' : 'translate-x-1'}`} />
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+                </div>
+
                 {/* TABS */}
                 <div className="flex border-b border-gray-700 mb-6">
                     <button
@@ -137,131 +290,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             Online
                         </div>
                     </button>
-                </div>
-
-                {/* GLOBAL: SUBTITLE SYNC SETTINGS */}
-                <div className="mb-6 border-b border-gray-800 pb-6">
-                    <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider flex items-center gap-2 pb-2 mb-3">
-                        <ListVideo size={14} /> Subtitle Synchronization
-                    </h4>
-                    <div className="px-1">
-                        <div className="flex justify-between items-center mb-1">
-                            <label className="text-xs font-bold text-gray-500 uppercase">Lock Stability Threshold</label>
-                            <span className="text-xs text-blue-400 font-mono">{syncThreshold} Frames</span>
-                        </div>
-                        <input
-                            type="range"
-                            min="1"
-                            max="30"
-                            step="1"
-                            value={syncThreshold}
-                            onChange={(e) => setSyncThreshold(parseInt(e.target.value))}
-                            className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                        />
-                        <p className="text-[10px] text-gray-500 mt-1">
-                            Number of consecutive frames the timestamp must exceed the target start time before unlocking cursor control. Increase if you see the cursor jumping back.
-                        </p>
-                    </div>
-                </div>
-
-                {/* GLOBAL: AUDIO SEGMENTATION SETTINGS */}
-                <div className="mb-8 border-b border-gray-800 pb-6">
-                    <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider flex items-center gap-2 pb-2 mb-3">
-                        <Scissors size={14} /> Audio Segmentation
-                    </h4>
-                    <div className="grid grid-cols-2 gap-3 mb-4">
-                        <button
-                            onClick={() => setSegmentationMethod('fixed')}
-                            className={`flex flex-col items-center justify-center p-3 rounded-lg border text-center transition-all ${segmentationMethod === 'fixed'
-                                ? 'bg-blue-900/30 border-blue-500 text-blue-300'
-                                : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-750'
-                                }`}
-                        >
-                            <span className="font-semibold text-xs mb-1">Progressive (Fixed)</span>
-                            <span className="text-[10px] opacity-70">Manual splits (20s, 60s...) for faster initial load.</span>
-                        </button>
-
-                        <button
-                            onClick={() => setSegmentationMethod('vad')}
-                            className={`flex flex-col items-center justify-center p-3 rounded-lg border text-center transition-all ${segmentationMethod === 'vad'
-                                ? 'bg-blue-900/30 border-blue-500 text-blue-300'
-                                : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'
-                                }`}
-                        >
-                            <span className="font-semibold text-xs mb-1">VAD (Auto)</span>
-                            <span className="text-[10px] opacity-70">Detects silence to split audio at sentence breaks.</span>
-                        </button>
-                    </div>
-
-                    {/* VAD SETTINGS */}
-                    {segmentationMethod === 'vad' && (
-                        <div className="space-y-4 px-1">
-                            <div>
-                                <div className="flex justify-between items-center mb-1">
-                                    <label className="text-xs font-bold text-gray-500 uppercase">Pre-split Batch Duration</label>
-                                    <span className="text-xs text-blue-400 font-mono">{vadSettings.batchSize}s</span>
-                                </div>
-                                <input
-                                    type="range"
-                                    min="10"
-                                    max="600"
-                                    step="10"
-                                    value={vadSettings.batchSize}
-                                    onChange={(e) => setVadSettings(p => ({ ...p, batchSize: parseInt(e.target.value) }))}
-                                    className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                                />
-                                <p className="text-[10px] text-gray-500 mt-1">Processing window size. Larger = better context but slower updates.</p>
-                            </div>
-
-                            <div>
-                                <div className="flex justify-between items-center mb-1">
-                                    <label className="text-xs font-bold text-gray-500 uppercase">Min Silence Duration</label>
-                                    <span className="text-xs text-blue-400 font-mono">{vadSettings.minSilence}s</span>
-                                </div>
-                                <input
-                                    type="range"
-                                    min="0.1"
-                                    max="1.0"
-                                    step="0.05"
-                                    value={vadSettings.minSilence}
-                                    onChange={(e) => setVadSettings(p => ({ ...p, minSilence: parseFloat(e.target.value) }))}
-                                    className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                                />
-                                <p className="text-[10px] text-gray-500 mt-1">Minimum silence required to trigger a split.</p>
-                            </div>
-
-                            <div>
-                                <div className="flex justify-between items-center mb-1">
-                                    <label className="text-xs font-bold text-gray-500 uppercase">Silence Threshold</label>
-                                    <span className="text-xs text-blue-400 font-mono">{vadSettings.silenceThreshold}</span>
-                                </div>
-                                <input
-                                    type="range"
-                                    min="0.001"
-                                    max="0.05"
-                                    step="0.001"
-                                    value={vadSettings.silenceThreshold}
-                                    onChange={(e) => setVadSettings(p => ({ ...p, silenceThreshold: parseFloat(e.target.value) }))}
-                                    className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                                />
-                                <p className="text-[10px] text-gray-500 mt-1">Sensitivity. Lower = cleaner audio needed. Higher = tolerates noise.</p>
-                            </div>
-
-                            {/* Filtering Toggle */}
-                            <div className="flex items-center justify-between pt-2 border-t border-gray-800 mt-2">
-                                <div>
-                                    <div className="text-xs font-bold text-gray-500 uppercase">Vocal Filtering</div>
-                                    <p className="text-[10px] text-gray-500">Band-pass filter (150-3000Hz) to isolate voice.</p>
-                                </div>
-                                <button
-                                    onClick={() => setVadSettings(p => ({ ...p, filteringEnabled: !p.filteringEnabled }))}
-                                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${vadSettings.filteringEnabled ? 'bg-blue-600' : 'bg-gray-700'}`}
-                                >
-                                    <span className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${vadSettings.filteringEnabled ? 'translate-x-5' : 'translate-x-1'}`} />
-                                </button>
-                            </div>
-                        </div>
-                    )}
                 </div>
 
                 {/* TAB CONTENT: LOCAL */}

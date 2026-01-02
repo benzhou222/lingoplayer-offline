@@ -55,7 +55,7 @@ export const VideoControls: React.FC<VideoControlsProps> = ({
   isMuted,
   onToggleMute,
 }) => {
-  const rates = [0.3, 0.4, 0.5, 0.6, 0.75, 1.0, 1.25, 1.5, 2.0];
+  const rates = [2.0, 1.5, 1.25, 1.0, 0.75, 0.6, 0.5, 0.4, 0.3];
 
   return (
     <div className="bg-gray-900 border-t border-gray-800 p-4 flex flex-col gap-3 select-none">

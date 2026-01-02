@@ -29,6 +29,10 @@ export default function App() {
     const [videoFile, setVideoFile] = useState<File | null>(null);
     const pendingSeekTimeRef = useRef<number | null>(null);
 
+    // Selection State for Subtitles
+    const [selectionRange, setSelectionRange] = useState<[number, number] | null>(null);
+    const [anchorIndex, setAnchorIndex] = useState<number | null>(null);
+
     const vocab = useVocabulary(settings, player);
     const subs = useSubtitles(player, videoFile, settings);
     const playlist = usePlaylist(
@@ -39,8 +43,13 @@ export default function App() {
         subs.autoLoadSubtitles
     );
 
-    // 修复：传入 handleManualSeek 确保方向键快进退能正常重置字幕锁定逻辑
     useKeyboardShortcuts(player, subs.handlePrevSentence, subs.handleNextSentence, subs.handleManualSeek);
+
+    // Reset selection when subtitle segment changes
+    useEffect(() => {
+        setSelectionRange(null);
+        setAnchorIndex(null);
+    }, [subs.currentSegmentIndex]);
 
     useEffect(() => {
         if (playlist.isPlaylistLoaded) {
@@ -99,13 +108,83 @@ export default function App() {
         }
     };
 
+    /**
+     * Handles word selection with two distinct modes:
+     * 1. Regular Click: Immediate word definition, resets any pending Shift anchor.
+     * 2. Shift+Click: 
+     *    - Click 1: Set anchor (no definition, dashed underline).
+     *    - Click 2: Complete range (definition, solid underline).
+     *    - Click 3: Reset anchor (back to Phase 1).
+     */
+    const handleWordSelection = (index: number, e: React.MouseEvent) => {
+        e.stopPropagation();
+        const currentText = subs.subtitles[subs.currentSegmentIndex].text;
+        const words = currentText.split(' ');
+
+        // Context calculation for AI
+        const context = subs.currentSegmentIndex < 1
+            ? (subs.currentSegmentIndex >= subs.subtitles.length - 1 ? subs.subtitles[subs.currentSegmentIndex].text : subs.subtitles[subs.currentSegmentIndex].text + " " + subs.subtitles[subs.currentSegmentIndex + 1].text)
+            : (subs.currentSegmentIndex >= subs.subtitles.length - 1 ? subs.subtitles[subs.currentSegmentIndex - 1].text + " " + subs.subtitles[subs.currentSegmentIndex].text : subs.subtitles[subs.currentSegmentIndex - 1].text + " " + subs.subtitles[subs.currentSegmentIndex].text + " " + subs.subtitles[subs.currentSegmentIndex + 1].text);
+
+        if (e.shiftKey) {
+            // Shift Mode Cycle
+            if (anchorIndex === null) {
+                // Phase 1: Start selection
+                setAnchorIndex(index);
+                setSelectionRange([index, index]);
+                // No definition call here
+            } else {
+                // Phase 2: Complete selection
+                const start = Math.min(anchorIndex, index);
+                const end = Math.max(anchorIndex, index);
+                setSelectionRange([start, end]);
+                setAnchorIndex(null); // Clear anchor so next Shift-click starts a new cycle
+
+                const selectedPhrase = words.slice(start, end + 1).join(' ');
+                vocab.handleWordClick(selectedPhrase, context);
+            }
+        } else {
+            // Regular Mode: Decoupled from Shift logic
+            setAnchorIndex(null); // Kill any pending shift state
+            setSelectionRange([index, index]);
+            vocab.handleWordClick(words[index], context);
+        }
+    };
+
     const [showVideoList, setShowVideoList] = useState(true);
     const isProcessingCurrent = videoFile && subs.processingVideoKey === `${videoFile.name}-${videoFile.size}`;
 
     return (
         <div className="flex h-screen bg-black text-gray-100 font-sans overflow-hidden relative">
             <SettingsModal isOpen={settings.isSettingsOpen} onClose={() => settings.setIsSettingsOpen(false)} {...settings} OFFLINE_MODELS={OFFLINE_MODELS} />
-            <SubtitlePanel width={layout.leftPanelWidth} subtitles={subs.subtitles} currentSegmentIndex={subs.currentSegmentIndex} isProcessing={!!isProcessingCurrent} isAnyProcessing={!!subs.processingVideoKey} isOffline={settings.isOffline} videoSrc={videoSrc} isConverting={playlist.isConverting} onGenerate={() => subs.handleGenerate(false)} onImport={subs.handleSubtitleImport} onExport={(f) => { if (subs.subtitles.length === 0) return; const content = f === 'srt' ? segmentsToSRT(subs.subtitles) : segmentsToVTT(subs.subtitles); const blob = new Blob([content], { type: 'text/plain' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `${videoFile?.name.replace(/\.[^/.]+$/, "") || "sub"}.${f}`; a.click(); }} editingSegmentIndex={subs.editingSegmentIndex} editText={subs.editText} editStart={subs.editStart} editEnd={subs.editEnd} onStartEdit={subs.startEditing} onSaveEdit={subs.saveEdit} onCancelEdit={subs.cancelEdit} setEditText={subs.setEditText} setEditStart={subs.setEditStart} setEditEnd={subs.setEditEnd} onDelete={subs.deleteSubtitle} onJumpTo={subs.jumpToSegment} currentTime={player.currentTime} formatTime={subs.formatTime} />
+            <SubtitlePanel
+                width={layout.leftPanelWidth}
+                subtitles={subs.subtitles}
+                currentSegmentIndex={subs.currentSegmentIndex}
+                isProcessing={!!isProcessingCurrent}
+                isAnyProcessing={!!subs.processingVideoKey}
+                isOffline={settings.isOffline}
+                videoSrc={videoSrc}
+                isConverting={playlist.isConverting}
+                onGenerate={() => subs.handleGenerate(false)}
+                onImport={subs.handleSubtitleImport}
+                onExport={(f) => { if (subs.subtitles.length === 0) return; const content = f === 'srt' ? segmentsToSRT(subs.subtitles) : segmentsToVTT(subs.subtitles); const blob = new Blob([content], { type: 'text/plain' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `${videoFile?.name.replace(/\.[^/.]+$/, "") || "sub"}.${f}`; a.click(); }}
+                editingSegmentIndex={subs.editingSegmentIndex}
+                editText={subs.editText}
+                editStart={subs.editStart}
+                editEnd={subs.editEnd}
+                onStartEdit={subs.startEditing}
+                onSaveEdit={subs.saveEdit}
+                onCancelEdit={subs.cancelEdit}
+                setEditText={subs.setEditText}
+                setEditStart={subs.setEditStart}
+                setEditEnd={subs.setEditEnd}
+                onDelete={subs.deleteSubtitle}
+                onInsertBefore={subs.insertSubtitleBefore}
+                onJumpTo={subs.jumpToSegment}
+                currentTime={player.currentTime}
+                formatTime={subs.formatTime}
+            />
             <div onMouseDown={layout.startResizingLeft} className="w-1 cursor-col-resize bg-gray-800 hover:bg-blue-500 transition-colors z-20 flex-shrink-0 hidden md:block" />
             <div className="flex-1 flex flex-col min-w-0 bg-gray-900 relative">
                 <div className="h-16 flex items-center justify-between px-6 bg-gray-900 border-b border-gray-800 flex-shrink-0">
@@ -118,11 +197,45 @@ export default function App() {
                         <button onClick={() => vocab.setShowVocabSidebar(!vocab.showVocabSidebar)} className={`p-2 rounded-lg transition-colors ${vocab.showVocabSidebar ? 'text-blue-400 bg-blue-900/20' : 'text-gray-400 hover:text-white'}`}><BookOpen size={20} /></button>
                     </div>
                 </div>
-                <VideoPlaylist show={showVideoList} tabs={playlist.tabs} activeTabId={playlist.activeTabId} onSwitchTab={playlist.setActiveTabId} onAddTab={playlist.handleAddTab} onRemoveTab={playlist.handleRemoveTab} onRenameTab={playlist.handleRenameTab} onReorderTabs={playlist.handleReorderTabs} videoList={playlist.getActiveFileList()} currentVideoFile={videoFile} videoStatuses={playlist.videoStatuses} draggedVideoIndex={playlist.draggedVideoIndex} processingVideoKey={subs.processingVideoKey} onLoadVideo={loadVideoFromFile} onBatchUpload={playlist.handleBatchUpload} onDeleteVideo={playlist.handleDeleteVideo} onClearList={playlist.handleClearList} onConvert={playlist.handleQueueConversion} onCancelConversion={(e, f) => { e.stopPropagation(); playlist.handleCancelConversion(`${f.name}-${f.size}`); }} onDragStart={(e, i) => playlist.setDraggedVideoIndex(i)} onDragOver={(e) => e.preventDefault()} onDrop={(e, i) => { e.preventDefault(); if (playlist.draggedVideoIndex === null) return; playlist.setTabs(prev => prev.map(t => t.id === playlist.activeTabId ? { ...t, files: (() => { const nl = [...t.files]; const [m] = nl.splice(playlist.draggedVideoIndex!, 1); nl.splice(i, 0, m); return nl; })() } : t)); playlist.setDraggedVideoIndex(null); }} onDragEnd={() => playlist.setDraggedVideoIndex(null)} />
+                <VideoPlaylist show={showVideoList} tabs={playlist.tabs} activeTabId={playlist.activeTabId} onSwitchTab={playlist.setActiveTabId} onAddTab={playlist.handleAddTab} onRemoveTab={playlist.handleRemoveTab} onRenameTab={playlist.handleRenameTab} onReorderTabs={playlist.handleReorderTabs} videoList={playlist.getActiveFileList()} currentVideoFile={videoFile} videoStatuses={playlist.videoStatuses} draggedVideoIndex={playlist.draggedVideoIndex} processingVideoKey={subs.processingVideoKey} onLoadVideo={loadVideoFromFile} onBatchUpload={playlist.handleBatchUpload} onDeleteVideo={playlist.handleDeleteVideo} onClearList={playlist.handleClearList} onConvert={playlist.handleQueueConversion} onCancelConversion={(e, f) => { e.stopPropagation(); playlist.handleCancelConversion(`${f.name}-${f.size}`); }} onDragStart={(e, i) => playlist.setDraggedVideoIndex(i)} onDragOver={(e) => e.preventDefault()} onDrop={(e) => e.preventDefault()} onDragEnd={() => playlist.setDraggedVideoIndex(null)} />
                 <div className="flex-1 flex flex-col overflow-hidden">
                     <div style={{ height: layout.videoHeight }} className="bg-black flex items-center justify-center relative flex-shrink-0">{videoSrc ? (<video ref={player.videoRef} src={videoSrc} className="w-full h-full object-contain" onClick={player.togglePlayPause} onLoadedMetadata={handleLoadedMetadata} onEnded={() => player.setIsPlaying(false)} onError={() => !subs.errorMsg && subs.setErrorMsg("Playback Error.")} playsInline />) : (<label className="text-gray-600 flex flex-col items-center cursor-pointer hover:text-gray-400 transition-colors"><Upload size={48} className="mb-4 opacity-50" /><p className="font-medium text-lg">Click to Load Video</p><input type="file" accept=".mp4,.mkv,.webm,.avi,.mov,.wmv" onChange={handleFileChange} className="hidden" /></label>)}</div>
                     <div onMouseDown={layout.startResizingVideo} className="h-1 cursor-row-resize bg-gray-800 hover:bg-blue-500 transition-colors z-20 flex-shrink-0 flex items-center justify-center group"><GripHorizontal size={12} className="text-gray-600 opacity-0 group-hover:opacity-100" /></div>
-                    <div style={{ height: layout.subtitleHeight }} className="bg-gray-900 p-6 text-center flex flex-col items-center justify-center flex-shrink-0 overflow-y-auto">{isProcessingCurrent && subs.subtitles.length === 0 ? (<div className="flex flex-col items-center justify-center gap-2 animate-pulse"><span className="text-blue-400 text-sm font-medium">Analyzing...</span></div>) : subs.errorMsg ? (<div className="flex items-center gap-2 text-red-400 text-sm bg-red-900/20 px-4 py-2 rounded"><AlertCircle size={16} /><span>{subs.errorMsg}</span></div>) : null}{subs.currentSegmentIndex !== -1 && subs.subtitles[subs.currentSegmentIndex] && (<div className="animate-in fade-in slide-in-from-bottom-2 duration-200 w-full flex justify-center"><p className="text-xl md:text-2xl font-medium text-white leading-relaxed max-w-3xl text-center">{subs.subtitles[subs.currentSegmentIndex].text.split(' ').map((word, i) => (<React.Fragment key={i}> <span onClick={(e) => { e.stopPropagation(); vocab.handleWordClick(word, subs.subtitles[subs.currentSegmentIndex].text); }} className="cursor-pointer hover:text-blue-400 select-none inline-block hover:underline decoration-blue-500/50 underline-offset-4 transition-colors"> {word} </span> {' '} </React.Fragment>))}</p></div>)}</div>
+                    <div style={{ height: layout.subtitleHeight }} className="bg-gray-900 p-6 text-center flex flex-col items-center justify-center flex-shrink-0 overflow-y-auto">
+                        {isProcessingCurrent && subs.subtitles.length === 0 ? (
+                            <div className="flex flex-col items-center justify-center gap-2 animate-pulse"><span className="text-blue-400 text-sm font-medium">Analyzing...</span></div>
+                        ) : subs.errorMsg ? (
+                            <div className="flex items-center gap-2 text-red-400 text-sm bg-red-900/20 px-4 py-2 rounded"><AlertCircle size={16} /><span>{subs.errorMsg}</span></div>
+                        ) : null}
+                        {subs.currentSegmentIndex !== -1 && subs.subtitles[subs.currentSegmentIndex] && (
+                            <div className="animate-in fade-in slide-in-from-bottom-2 duration-200 w-full flex justify-center">
+                                <p className="text-xl md:text-2xl font-medium text-white leading-relaxed max-w-3xl text-center select-none">
+                                    {subs.subtitles[subs.currentSegmentIndex].text.split(' ').map((word, i) => {
+                                        const isSelected = selectionRange && i >= selectionRange[0] && i <= selectionRange[1];
+                                        // A selection is "pending" if the anchor is still active (waiting for second click)
+                                        const isPending = isSelected && anchorIndex !== null;
+
+                                        return (
+                                            <React.Fragment key={i}>
+                                                <span
+                                                    onClick={(e) => handleWordSelection(i, e)}
+                                                    className={`cursor-pointer px-0.5 rounded transition-all inline-block underline-offset-8 decoration-2 ${isSelected
+                                                        ? isPending
+                                                            ? 'underline decoration-dashed decoration-blue-500/60 text-blue-300 animate-pulse'
+                                                            : 'underline decoration-[3.5px] decoration-solid decoration-blue-500 text-blue-400'
+                                                        : 'hover:underline decoration-blue-500/30 text-white hover:text-blue-400'
+                                                        }`}
+                                                >
+                                                    {word}
+                                                </span>
+                                                {''}
+                                            </React.Fragment>
+                                        );
+                                    })}
+                                </p>
+                            </div>
+                        )}
+                    </div>
                     <div onMouseDown={layout.startResizingSubtitle} className="h-1 cursor-row-resize bg-gray-800 hover:bg-blue-500 transition-colors z-20 flex-shrink-0 flex items-center justify-center group"><GripHorizontal size={12} className="text-gray-600 opacity-0 group-hover:opacity-100" /></div>
                     <div className="flex-1 min-h-0 bg-gray-950 overflow-hidden flex flex-col"><WordDefinitionPanel definition={vocab.selectedWord} onAddToVocab={vocab.addToVocab} isSaved={vocab.selectedWord ? vocab.vocabulary.some(v => v.word === vocab.selectedWord!.word) : false} isLoading={vocab.loadingWord} onWordSearch={(word) => vocab.handleWordClick(word, "")} /></div>
                 </div>

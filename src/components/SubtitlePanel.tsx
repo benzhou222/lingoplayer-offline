@@ -1,5 +1,6 @@
+
 import React, { useEffect, useRef } from 'react';
-import { ListVideo, WifiOff, Wifi, Square, PlayCircle, FileUp, FileDown, Edit3, Trash2, Clock, AlertCircle } from 'lucide-react';
+import { ListVideo, WifiOff, Wifi, Square, PlayCircle, FileUp, FileDown, Edit3, Trash2, Clock, Plus } from 'lucide-react';
 import { SubtitleSegment } from '../types';
 
 interface SubtitlePanelProps {
@@ -9,14 +10,13 @@ interface SubtitlePanelProps {
     isProcessing: boolean;
     isAnyProcessing: boolean;
     isOffline: boolean;
-    // setIsOffline prop removed as status is now determined by settings
     videoSrc: string | null;
     isConverting: boolean;
     onGenerate: () => void;
     onImport: (e: React.ChangeEvent<HTMLInputElement>) => void;
     onExport: (format: 'srt' | 'vtt') => void;
-    
-    // Editing
+
+    // Editing & Insertion
     editingSegmentIndex: number;
     editText: string;
     editStart: string;
@@ -28,6 +28,7 @@ interface SubtitlePanelProps {
     setEditStart: (s: string) => void;
     setEditEnd: (s: string) => void;
     onDelete: (e: React.MouseEvent, index: number) => void;
+    onInsertBefore: (index: number) => void;
     onJumpTo: (index: number) => void;
     currentTime: number;
     formatTime: (s: number) => string;
@@ -38,7 +39,7 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
     videoSrc, isConverting, onGenerate, onImport, onExport,
     editingSegmentIndex, editText, editStart, editEnd,
     onStartEdit, onSaveEdit, onCancelEdit, setEditText, setEditStart, setEditEnd,
-    onDelete, onJumpTo, currentTime, formatTime
+    onDelete, onInsertBefore, onJumpTo, currentTime, formatTime
 }) => {
     const subtitleListRef = useRef<HTMLDivElement>(null);
 
@@ -52,7 +53,6 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
                 const elementHeight = activeElement.clientHeight;
                 const containerHeight = container.clientHeight;
 
-                // Calculate center position
                 const targetScrollTop = elementTop - (containerHeight / 2) + (elementHeight / 2);
 
                 container.scrollTo({
@@ -64,10 +64,10 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
     }, [currentSegmentIndex, editingSegmentIndex]);
 
     const isGenerateDisabled = !videoSrc || (isAnyProcessing && !isProcessing);
-    const generateButtonTitle = !videoSrc 
-        ? "Load a video first" 
-        : (isAnyProcessing && !isProcessing) 
-            ? "Another video is currently generating subtitles. Please wait." 
+    const generateButtonTitle = !videoSrc
+        ? "Load a video first"
+        : (isAnyProcessing && !isProcessing)
+            ? "Another video is currently generating subtitles. Please wait."
             : "";
 
     return (
@@ -81,7 +81,6 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
                         <ListVideo className="text-blue-500" />
                         <h2 className="font-bold text-lg">Transcript</h2>
                     </div>
-                    {/* Read-only Offline/Online Indicator */}
                     <div
                         className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border transition-all cursor-default select-none ${isOffline ? 'bg-green-900/20 border-green-800 text-green-400' : 'bg-blue-900/20 border-blue-800 text-blue-400'}`}
                         title="Change mode in Settings"
@@ -91,19 +90,17 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
                     </div>
                 </div>
 
-                {/* GENERATE / IMPORT / EXPORT TOOLBAR */}
                 <div className="grid grid-cols-2 gap-2 mb-2">
                     <button
                         onClick={onGenerate}
                         disabled={isGenerateDisabled}
                         title={generateButtonTitle}
-                        className={`flex items-center justify-center gap-2 py-2 px-3 text-xs font-bold rounded transition-colors ${
-                            isProcessing 
-                                ? 'bg-red-600 hover:bg-red-500 text-white' 
+                        className={`flex items-center justify-center gap-2 py-2 px-3 text-xs font-bold rounded transition-colors ${isProcessing
+                                ? 'bg-red-600 hover:bg-red-500 text-white'
                                 : isGenerateDisabled
                                     ? 'bg-gray-800 text-gray-500 cursor-not-allowed'
                                     : 'bg-blue-600 hover:bg-blue-500 text-white'
-                        }`}
+                            }`}
                     >
                         {isProcessing ? <Square size={14} fill="currentColor" /> : <PlayCircle size={14} />}
                         <span>{isProcessing ? 'Stop' : 'Generate'}</span>
@@ -167,6 +164,13 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
                                     <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                                         {!isEditing && (
                                             <>
+                                                <button
+                                                    onClick={(e) => { e.stopPropagation(); onInsertBefore(idx); }}
+                                                    className="text-gray-500 hover:text-green-400 p-1 rounded hover:bg-gray-700"
+                                                    title="Insert line before"
+                                                >
+                                                    <Plus size={12} />
+                                                </button>
                                                 <button
                                                     onClick={(e) => { e.stopPropagation(); onStartEdit(idx, sub.text, sub.start, sub.end); }}
                                                     className="text-gray-500 hover:text-blue-400 p-1 rounded hover:bg-gray-700"
@@ -244,7 +248,7 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
                                                     onCancelEdit();
                                                 }
                                             }}
-                                            onClick={(e) => e.stopPropagation()} 
+                                            onClick={(e) => e.stopPropagation()}
                                             className="w-full bg-gray-900 text-white text-sm p-2 rounded border border-blue-500 focus:outline-none resize-none"
                                             rows={Math.max(2, Math.ceil(editText.length / 40))}
                                         />

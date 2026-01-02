@@ -49,6 +49,7 @@ export const useSubtitles = (player: any, videoFile: File | null, settings: any)
     const audioDataCacheRef = useRef<Float32Array | null>(null);
     const lockStateRef = useRef<{ index: number; start: number; hits: number } | null>(null);
     const lastSaveTimeRef = useRef<number>(0);
+    const isNewInsertionRef = useRef(false); // Track if currently editing a brand new insertion
 
     const subsRef = useRef<SubtitleSegment[]>([]);
     const modeRef = useRef<PlaybackMode>(PlaybackMode.CONTINUOUS);
@@ -176,12 +177,11 @@ export const useSubtitles = (player: any, videoFile: File | null, settings: any)
         if (currentIndex !== -1) {
             if (currentIndex > 0) jumpToSegment(currentIndex - 1);
         } else {
-            // 寻找当前时间点之前的最后一条字幕
             const prevIndex = [...segments].reverse().findIndex(s => s.end < currentTime);
             if (prevIndex !== -1) {
                 jumpToSegment(segments.length - 1 - prevIndex);
             } else if (segments.length > 0) {
-                jumpToSegment(0); // 如果前面没字幕了，跳到第一条
+                jumpToSegment(0);
             }
         }
     };
@@ -194,13 +194,65 @@ export const useSubtitles = (player: any, videoFile: File | null, settings: any)
         if (currentIndex !== -1) {
             if (currentIndex < segments.length - 1) jumpToSegment(currentIndex + 1);
         } else {
-            // 寻找当前时间点之后的第一个字幕
             const nextIndex = segments.findIndex(s => s.start > currentTime);
             if (nextIndex !== -1) {
                 jumpToSegment(nextIndex);
             }
         }
     };
+
+    const startEditing = useCallback((i: number, t: string, s: number, e: number) => {
+        isNewInsertionRef.current = false; // Regular edit resets the "new" flag
+        setEditingSegmentIndex(i);
+        setEditText(t);
+        setEditStart(formatTime(s));
+        setEditEnd(formatTime(e));
+        if (player.videoRef.current) player.videoRef.current.pause();
+        player.setIsPlaying(false);
+    }, [player]);
+
+    const insertSubtitleBefore = useCallback((index: number) => {
+        const currentSub = subtitles[index];
+        const prevSub = subtitles[index - 1];
+
+        let newStart = 0;
+        let newEnd = currentSub.start;
+
+        if (prevSub) {
+            const gap = currentSub.start - prevSub.end;
+            if (gap > 0.5) {
+                newStart = prevSub.end;
+            } else {
+                newStart = Math.max(prevSub.end, currentSub.start - 2);
+            }
+        } else {
+            newStart = Math.max(0, currentSub.start - 2);
+        }
+
+        const newSeg: SubtitleSegment = {
+            id: Date.now(),
+            start: newStart,
+            end: newEnd,
+            text: 'New segment'
+        };
+
+        const updated = [...subtitles];
+        updated.splice(index, 0, newSeg);
+        const reindexed = updated.map((s, i) => ({ ...s, id: i }));
+
+        updateSubtitles(reindexed);
+
+        // Set flag and enter edit mode
+        setTimeout(() => {
+            isNewInsertionRef.current = true;
+            setEditingSegmentIndex(index);
+            setEditText(newSeg.text);
+            setEditStart(formatTime(newSeg.start));
+            setEditEnd(formatTime(newSeg.end));
+            if (player.videoRef.current) player.videoRef.current.pause();
+            player.setIsPlaying(false);
+        }, 10);
+    }, [subtitles, updateSubtitles, player]);
 
     useEffect(() => {
         let rafId: number;
@@ -247,6 +299,16 @@ export const useSubtitles = (player: any, videoFile: File | null, settings: any)
         return () => cancelAnimationFrame(rafId);
     }, [player.isPlaying, videoFile, settings.syncThreshold, editingSegmentIndex, player.setCurrentTime]);
 
+    const cancelEdit = useCallback(() => {
+        if (isNewInsertionRef.current && editingSegmentIndex !== -1) {
+            // It was a fresh insertion, delete it on cancel
+            const next = subtitles.filter((_, idx) => idx !== editingSegmentIndex);
+            updateSubtitles(next.map((s, i) => ({ ...s, id: i })));
+        }
+        setEditingSegmentIndex(-1);
+        isNewInsertionRef.current = false;
+    }, [editingSegmentIndex, subtitles, updateSubtitles]);
+
     return {
         subtitles, setSubtitles, currentSegmentIndex, setCurrentSegmentIndex,
         videoSubtitlesMap, setVideoSubtitlesMap, playbackProgressMap, setPlaybackProgressMap,
@@ -256,19 +318,19 @@ export const useSubtitles = (player: any, videoFile: File | null, settings: any)
         handlePrevSentence,
         handleNextSentence,
         formatTime,
-        startEditing: (i: number, t: string, s: number, e: number) => {
-            setEditingSegmentIndex(i); setEditText(t); setEditStart(formatTime(s)); setEditEnd(formatTime(e));
-            if (player.videoRef.current) player.videoRef.current.pause();
-        },
+        insertSubtitleBefore,
+        startEditing,
         saveEdit: () => {
             const s = parseTime(editStart);
             const e = parseTime(editEnd);
             if (isNaN(s) || isNaN(e)) { alert("Invalid time format"); return; }
             const next = [...subtitles];
             next[editingSegmentIndex] = { ...next[editingSegmentIndex], text: editText, start: s, end: e };
-            updateSubtitles(next); setEditingSegmentIndex(-1);
+            updateSubtitles(next);
+            setEditingSegmentIndex(-1);
+            isNewInsertionRef.current = false; // Saved successfully
         },
-        cancelEdit: () => setEditingSegmentIndex(-1),
+        cancelEdit,
         deleteSubtitle: (e: any, i: number) => {
             e.stopPropagation(); setSubtitles(prev => prev.filter((_, idx) => idx !== i));
         },
